@@ -32,13 +32,13 @@ interface axi_lite_if(input logic clk, input logic rst_n);
 
     // defining the signals for the slave interface
     modport slave(
-        output awaddr, awvalid, wdata, wvalid, araddr, arvalid, rready, bready,
-        input awready, wready, bresp, bvalid, arready, rdata, rvalid
+        input awaddr, awvalid, wdata, wvalid, wstrb, araddr, arvalid, rready, bready,
+        output awready, wready, bresp, bvalid, arready, rdata, rvalid
     ); 
 
     // defining the signals for the master interface
     modport master(
-        output awaddr, awvalid, wdata, wvalid, araddr, arvalid, rready, bready,
+        output awaddr, awvalid, wdata, wvalid, wstrb, araddr, arvalid, rready, bready,
         input awready, wready, bresp, bvalid, arready, rdata, rvalid
     );
 

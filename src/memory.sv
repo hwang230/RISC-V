@@ -15,15 +15,26 @@ module memory #(
 
     assign wr_idx = bus.awaddr[ADDR_WIDTH+1:2];
     assign rd_idx = bus.araddr[ADDR_WIDTH+1:2];
+    assign bus.awready = 1'b1;
+    assign bus.wready  = 1'b1;
+    assign bus.arready = !bus.rvalid;
 
     always_ff @(posedge bus.clk) begin
         // synchronous reset
-        if (bus.rst_n) begin
+        if (!bus.rst_n) begin
             bus.bresp  <= 2'b00;
             bus.bvalid <= 1'b0;
             bus.rdata  <= '0;
             bus.rvalid <= 1'b0;
         end else begin
+            if (bus.bvalid && bus.bready) begin
+                bus.bvalid <= 1'b0;
+            end
+
+            if (bus.rvalid && bus.rready) begin
+                bus.rvalid <= 1'b0;
+            end
+
             // store operation
             if (bus.awvalid && bus.awready && bus.wvalid && bus.wready) begin
                 // select where to store the data based on wstrb signal
@@ -45,7 +56,12 @@ module memory #(
             end
             // load operation
             if (bus.arvalid && bus.arready) begin
-                bus.rdata <= mem[rd_idx];
+                if (bus.araddr < MAX_MEM_SIZE) begin
+                    bus.rdata <= mem[rd_idx];
+                end else begin
+                    bus.rdata <= '0;
+                end
+                bus.rvalid <= 1'b1;
             end
         end
     end
