@@ -1,13 +1,12 @@
+`include "../cpu_pkg.sv"
+import cpu_pkg::*;
+
 module alu_shift(
-    input logic [4:0] alu_op,
+    input alu_op_e alu_op,
     input logic [31:0] rs1_val,
     input logic [31:0] rs2_val,
     output logic [31:0] result
 );
-    localparam logic [4:0] ALU_SLL = 5'b00101;
-    localparam logic [4:0] ALU_SRL = 5'b00110;
-    localparam logic [4:0] ALU_SRA = 5'b00111;
-
     always_comb begin
         case(alu_op)
             ALU_SLL: result = rs1_val << rs2_val[4:0];

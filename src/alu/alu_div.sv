@@ -1,13 +1,12 @@
+`include "../cpu_pkg.sv"
+import cpu_pkg::*;
+
 module alu_div(
-    input logic [4:0] alu_op,
+    input alu_op_e alu_op,
     input logic [31:0] rs1_val,
     input logic [31:0] rs2_val,
     output logic [31:0] result
 );
-    localparam logic [4:0] ALU_DIV  = 5'b10100;
-    localparam logic [4:0] ALU_DIVU = 5'b10101;
-    localparam logic [4:0] ALU_REM  = 5'b10110;
-
     always_comb begin
         // handle division by zero according to RISC-V rules
         case (alu_op)
