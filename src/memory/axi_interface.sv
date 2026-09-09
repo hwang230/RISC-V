@@ -1,7 +1,4 @@
-interface axi_lite_if(input logic clk, input logic rst_n);
-    // RESET SIGNAL
-    logic rst_n;
-    
+interface axi_lite_if();
     // Address Write Channel
     logic [31:0] awaddr; // assert by master to indicate address
     logic awvalid; // assert by master to indicate address is valid
@@ -19,7 +16,7 @@ interface axi_lite_if(input logic clk, input logic rst_n);
 
     // Write signal to inform what to store
     logic [3:0] wstrb; 
-
+    
     // Address Read Channel
     logic [31:0] araddr; // assert by master to indicate address
     logic arvalid; // assert by master to indicate address is valid
