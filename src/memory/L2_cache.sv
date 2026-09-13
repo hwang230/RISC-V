@@ -25,7 +25,10 @@ module l2_cache #(
     logic [TAG_BITS-1:0]    tag_array   [0:NUM_SETS-1][0:NUM_WAYS-1];
     logic                   valid_array [0:NUM_SETS-1][0:NUM_WAYS-1];
     logic [1:0]             lru_rank    [0:NUM_SETS-1][0:NUM_WAYS-1]; // 0 - MRU & 3 - LRU
-
+    logic [1:0] victim_way;
+    logic found_invalid;
+    logic [1:0] old_hit_rank;
+    
     typedef enum logic [1:0]{
         OWNER_NONE,
         OWNER_I,
@@ -38,9 +41,8 @@ module l2_cache #(
         READ_MISS,
         READ_RESP,
         WRITE_WAIT,
-        WRITE_MISS,
-        WRITE_RESP,
-        WRITE_BACK
+        WRITE_THROUGH,
+        WRITE_RESP
     } state_t; 
 
     state_t state = IDLE;
@@ -51,10 +53,19 @@ module l2_cache #(
     logic [ADDR_WIDTH-1:0] writeaddr;
     logic [ADDR_WIDTH-1:0] readaddr; 
     logic [DATA_WIDTH-1:0] readdata;
-    logic [DATA_WIDTH-1:0] resp; 
-    logic [INDEX_BITS-1:0] set_idx;
-    logic [TAG_BITS-1:0] tag; 
-    logic [OFFSET_BITS-1:0] word_off; 
+    logic [1:0] resp; 
+    logic [INDEX_BITS-1:0] read_set_idx;
+    logic [TAG_BITS-1:0] read_tag; 
+    logic [OFFSET_BITS-1:0] read_word_off; 
+    logic [INDEX_BITS-1:0] write_set_idx;
+    logic [TAG_BITS-1:0] write_tag; 
+    logic [OFFSET_BITS-1:0] write_word_off; 
+
+    // for master-slave ack
+    // only needed miss case
+    logic ar_sent; // dram accepts araddr
+    logic aw_sent; // dram accepts awaddr
+    logic w_sent; // dram accepts wdata
 
     // internal signal allowing waddr and wdata to not arrival at the same time
     logic w_received = 1'b0;
@@ -66,14 +77,39 @@ module l2_cache #(
     localparam LAT_CNT_WIDTH = $clog2(LATENCY + 1);
     logic [LAT_CNT_WIDTH-1:0] latency_count;
 
+
+    // set/tag/offset
+    assign write_set_idx  = writeaddr[OFFSET_BITS +: INDEX_BITS];
+    assign write_tag      = writeaddr[ADDR_WIDTH-1 -: TAG_BITS];
+    assign write_word_off = writeaddr[OFFSET_BITS-1:2];
+
+    assign read_set_idx  = readaddr[OFFSET_BITS +: INDEX_BITS];
+    assign read_tag      = readaddr[ADDR_WIDTH-1 -: TAG_BITS];
+    assign read_word_off = readaddr[OFFSET_BITS-1:2];
+
     // for state transition
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             // reset oepration
             state <= IDLE;
+            owner <= OWNER_NONE;
             w_received <= 1'b0;
             aw_received <= 1'b0;
             latency_count <= '0;
+            readaddr  <= '0;
+            writeaddr <= '0;
+            readdata  <= '0;
+            writedata <= '0;
+            resp      <= '0;
+            ar_sent   <= 1'b0;
+            aw_sent   <= 1'b0;
+            w_sent    <= 1'b0;
+            for (int set = 0; set < NUM_SETS; set++) begin
+                for (int way = 0; way < NUM_WAYS; way++) begin
+                    valid_array[set][way] <= 1'b0;
+                    lru_rank[set][way]    <= way;
+                end
+            end
         end else begin
             case (state)
                 // assign both arbiter and internal signal right away
@@ -111,15 +147,15 @@ module l2_cache #(
                         latency_count <= '0;
                         if (hit) begin
                             state <= READ_RESP;
-                            readdata <= data_array[set_idx][hit_way]
-                            [word_off * DATA_WIDTH +: DATA_WIDTH];
+                            readdata <= data_array[read_set_idx][hit_way]
+                            [read_word_off * DATA_WIDTH +: DATA_WIDTH];
 
                             // update LRU bits
                             for (int way = 0; way < NUM_WAYS; way++) begin
-                                if (lru_rank[set_idx][way] < old_hit_rank) begin
-                                    lru_rank[set_idx][way] <= lru_rank[set_idx][way] + 1'b1;
+                                if (lru_rank[read_set_idx][way] < old_hit_rank) begin
+                                    lru_rank[read_set_idx][way] <= lru_rank[read_set_idx][way] + 1'b1;
                                 end else if (way == hit_way) begin
-                                    lru_rank[set_idx][hit_way] <= '0;
+                                    lru_rank[read_set_idx][hit_way] <= '0;
                                 end
                             end
                         end else begin
@@ -132,12 +168,31 @@ module l2_cache #(
                 end
 
                 READ_MISS: begin 
+
+                    if (axi_master.arvalid && axi_master.arready)
+                        ar_sent <= 1'b1;
+
+                    if (axi_master.rvalid && axi_master.rready) 
+                        ar_sent <= 1'b0;
+
                     // if DRAM not return yet, stay in here
                     if (axi_master.rvalid && axi_master.rready) begin
                         // after DRAM comes back, go in READ_RESP
-                        //TODO: need to fetch the whole block - and read it from there
-                        // Need to incorporate LRU + add valid bits
-
+                        // update LRU bits
+                        for (int way = 0; way < NUM_WAYS; way++) begin
+                            if (way == victim_way) begin
+                                // set this and shift the rest
+                                lru_rank[read_set_idx][way] <= '0;
+                            end else if (valid_array[read_set_idx][way] &&
+                                    lru_rank[read_set_idx][way] < NUM_WAYS-1) begin
+                                lru_rank[read_set_idx][way]
+                                    <= lru_rank[read_set_idx][way] + 1'b1;
+                            end
+                        end
+                        // TODO: perform refill logic here to bring all line
+                        data_array[read_set_idx][victim_way] <= axi_master.rdata;
+                        tag_array[read_set_idx][victim_way]  <= read_tag;
+                        valid_array[read_set_idx][victim_way] <= 1'b1;
                         readdata <= axi_master.rdata;
                         state <= READ_RESP;
                     end 
@@ -163,67 +218,102 @@ module l2_cache #(
                 WRITE_WAIT: begin
                     if (latency_count == LATENCY - 1) begin
                         latency_count <= '0;
+
                         if (hit) begin
-                            state <= WRITE_BACK;
-                            data_array[set_idx][hit_way]
-                            [word_off * DATA_WIDTH +: DATA_WIDTH] = writedata;
+                            state <= WRITE_THROUGH;
+                            data_array[write_set_idx][hit_way]
+                            [write_word_off * DATA_WIDTH +: DATA_WIDTH] <= writedata;
 
                             // update LRU
                             for (int way = 0; way < NUM_WAYS; way++) begin
-                                if (lru_rank[set_idx][way] < old_hit_rank) begin
-                                    lru_rank[set_idx][way] <= lru_rank[set_idx][way] + 1'b1;
+                                if (lru_rank[write_set_idx][way] < old_hit_rank) begin
+                                    lru_rank[write_set_idx][way] <= lru_rank[write_set_idx][way] + 1'b1;
                                 end else if (way == hit_way) begin
-                                    lru_rank[set_idx][hit_way] <= '0;
+                                    lru_rank[write_set_idx][hit_way] <= '0;
                                 end
                             end
-
+                            
                         end else begin
                             // miss case
                             latency_count <= '0;
-                            state <= WRITE_MISS;
+                            state <= WRITE_THROUGH;
                         end
                     end else begin
                         latency_count <= latency_count + 1'b1;
                     end
                 end 
 
-                WRITE_MISS: begin
-                    // if DRAM not return yet, stay in here
+                WRITE_THROUGH: begin
+                    // write-address accepted by DRAM
+                    if (axi_master.awvalid && axi_master.awready) begin
+                        aw_sent <= 1'b1;
+                    end
+
+                    // write-data accepted by DRAM
+                    if (axi_master.wvalid && axi_master.wready) begin
+                        w_sent <= 1'b1;
+                    end
+
+                    // DRAM write completed
                     if (axi_master.bvalid && axi_master.bready) begin
-                        // after DRAM comes back, go in WRITE_RESP
-                        // TODO: need to fetch the whole block - and write it there
-                        // then write it through to DRAM
-                        // update LRU + valid bits
 
                         resp <= axi_master.bresp;
-                        state <= WRITE_BACK;
-                    end 
+
+                        aw_sent <= 1'b0;
+                        w_sent  <= 1'b0;
+
+                        state <= WRITE_RESP;
+                    end
                     
                 end
 
                 WRITE_RESP: begin
-                    if (owner == OWNER_D) begin
-                        if (axi_slave_d.bready && axi_slave_d.bvalid) begin
-                            axi_slave_d.bresp <= resp;  
-                            aw_received <= 1'b0;
-                            w_received <= 1'b0;
-                            writedata <= '0;
-                            writeaddr <= '0;
-                            state <= IDLE;
-                        end
-                    end 
+                    if (axi_slave_d.bready && axi_slave_d.bvalid) begin
+                        aw_received <= 1'b0;
+                        w_received <= 1'b0;
+                        writedata <= '0;
+                        writeaddr <= '0;                            
+                        state <= IDLE;
+                    end
                 end
 
-                WRITE_BACK: begin
-                    // TODO: write-through part
-                    // need to raise AXI signal for axi_master 
-                end
+                
             endcase
         end
     end
 
     // for axi signal
     always_comb begin
+        // L1I-facing
+        axi_slave_i.arready = 1'b0;
+        axi_slave_i.rvalid  = 1'b0;
+        axi_slave_i.rdata   = '0;
+
+        // L1D-facing
+        axi_slave_d.arready = 1'b0;
+        axi_slave_d.awready = 1'b0;
+        axi_slave_d.wready  = 1'b0;
+        axi_slave_d.rvalid  = 1'b0;
+        axi_slave_d.rdata   = '0;
+        axi_slave_d.bvalid  = 1'b0;
+        axi_slave_d.bresp   = resp;
+
+        // DRAM-facing
+        axi_master.arvalid = 1'b0;
+        axi_master.araddr  = '0;
+        axi_master.rready  = 1'b0;
+
+        axi_master.awvalid = 1'b0;
+        axi_master.awaddr  = '0;
+        axi_master.wvalid  = 1'b0;
+        axi_master.wdata   = '0;
+        axi_master.bready  = 1'b0;
+
+        hit         = 1'b0;
+        hit_way     = '0;
+        old_hit_rank = '0;
+        victim_way = '0;
+        found_invalid = 1'b0;
         case (state)
             IDLE: begin
                 if (aw_received || w_received || axi_slave_d.awvalid 
@@ -231,27 +321,33 @@ module l2_cache #(
                     // Write in progress or master is requesting a write
                     axi_slave_d.arready = 1'b0;
                     axi_slave_d.awready = !aw_received;
-                    axi_slave.wready  = !w_received;
+                    axi_slave_d.wready  = !w_received;
                 end else begin
                     // No write request, allow read -- ensure only one request goes through
-                    axi_slave.arready = 1'b1;
+                    // give L1D priroity like usual
+                    if (axi_slave_d.arvalid) begin
+                        axi_slave_d.arready = 1'b1;
+                        axi_slave_i.arready = 1'b0;
+                    end
+                    else begin
+                        axi_slave_d.arready = 1'b0;
+                        axi_slave_i.arready = 1'b1;
+                    end
                 end
             end
 
             READ_WAIT: begin
                 // no AXI signal update
-                set_idx  = readaddr[OFFSET_BITS +: INDEX_BITS];
-                tag      = readaddr[ADDR_WIDTH-1 -: TAG_BITS];
-                word_off = readaddr[OFFSET_BITS-1:2];
                 hit = 1'b0;
                 hit_way = '0;
                 old_hit_rank = 2'b00;
                 // compare here
                 for (int way = 0; way < NUM_WAYS; way++) begin
-                    if (valid_array[set_idx][way] && tag_array[set_idx][way] == tag) begin
+                    if (valid_array[read_set_idx][way] 
+                    && tag_array[read_set_idx][way] == read_tag) begin
                         hit = 1'b1;
                         hit_way = way;
-                        old_hit_rank = lru_rank[set_idx][way];
+                        old_hit_rank = lru_rank[read_set_idx][way];
                     end 
                 end
             end
@@ -259,8 +355,24 @@ module l2_cache #(
             READ_MISS: begin
                 // should raise master here
                 axi_master.araddr = readaddr;
-                axi_master.arvalid = 1'b1;
-                axi_master.rready = 1'b1;
+                axi_master.arvalid = !ar_sent;
+                axi_master.rready = ar_sent;
+
+                // check for invalid
+                for (int way = 0; way < NUM_WAYS; way++) begin
+                    if (!found_invalid && !valid_array[read_set_idx][way]) begin
+                        victim_way    = way;
+                        found_invalid = 1'b1;
+                    end
+                end
+
+                // no invalid then evict the LRU way
+                if (!found_invalid) begin
+                    for (int way = 0; way < NUM_WAYS; way++) begin
+                        if (lru_rank[read_set_idx][way] == 2'b11)
+                            victim_way = way;
+                    end
+                end
             end
 
             READ_RESP: begin
@@ -269,34 +381,71 @@ module l2_cache #(
                     axi_slave_d.rdata = readdata;
                 end else if (owner == OWNER_I) begin
                     axi_slave_i.rvalid = 1'b1;
+                    axi_slave_i.rdata = readdata;
                 end
             end
 
             WRITE_WAIT: begin
                 // no AXI signal update
-                set_idx  = readaddr[OFFSET_BITS +: INDEX_BITS];
-                tag      = readaddr[ADDR_WIDTH-1 -: TAG_BITS];
-                word_off = readaddr[OFFSET_BITS-1:2];
                 hit = 1'b0;
                 hit_way = '0;
                 old_hit_rank = 2'b00;
-                // compare here
+
+                // find the old rank and the correct way
                 for (int way = 0; way < NUM_WAYS; way++) begin
-                    if (valid_array[set_idx][way] && tag_array[set_idx][way] == tag) begin
+                    if (valid_array[write_set_idx][way] && 
+                    tag_array[write_set_idx][way] == write_tag) begin
                         hit = 1'b1;
                         hit_way = way;
-                        old_hit_rank = lru_rank[set_idx][way];
+                        old_hit_rank = lru_rank[write_set_idx][way];
                     end
                 end
             end 
 
-            WRITE_MISS: begin
-                // should raise master here
-                axi_master.awaddr = writeaddr;
-                axi_master.awvalid = 1'b1;
-                axi_master.wdata = writedata;
-                axi_master.wvalid = 1'b1;
+            // The replacement logic should be kept
+            // Commented out for now
+            // WRITE_THROUGH: begin
+            //     // should raise master here
+            //     axi_master.awaddr = writeaddr;
+            //     axi_master.awvalid = 1'b1;
+            //     axi_master.wdata = writedata;
+            //     axi_master.wvalid = 1'b1;
+            //     axi_master.bready  = 1'b1;
+            //     // reset victim finding vars
+            //     victim_way   = '0;
+            //     found_invalid = 1'b0;
+                
+
+            //     // check for invalid
+            //     for (int way = 0; way < NUM_WAYS; way++) begin
+            //         if (!found_invalid && !valid_array[write_set_idx][way]) begin
+            //             victim_way    = way;
+            //             found_invalid = 1'b1;
+            //         end
+            //     end
+
+            //     // no invalid then evict the LRU way
+            //     if (!found_invalid) begin
+            //         for (int way = 0; way < NUM_WAYS; way++) begin
+            //             if (lru_rank[write_set_idx][way] == 2'b11)
+            //                 victim_way = way;
+            //         end
+            //     end
+            // end
+
+            WRITE_THROUGH: begin
+
+                axi_master.awaddr  = writeaddr;
+                axi_master.wdata   = writedata;
+
+                axi_master.awvalid = !aw_sent;
+                axi_master.wvalid  = !w_sent;
+
+                if (aw_sent && w_sent)
+                    axi_master.bready = 1'b1;
+
             end
+
             WRITE_RESP: begin
                 if (owner == OWNER_D) begin
                     axi_slave_d.bvalid = 1'b1;
@@ -305,8 +454,7 @@ module l2_cache #(
                 end
             end
 
-            WRITE_BACK: begin
-            end
+           
             default: begin
             end
         endcase
