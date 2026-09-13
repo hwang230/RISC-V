@@ -29,7 +29,7 @@ module DRAM #(
         WRITE_RESP
     } state_t;
 
-    state_t state; 
+    state_t state = IDLE; 
 
     // internal variable for latching purpose
     logic [DATA_WIDTH-1:0] writedata;
@@ -171,7 +171,7 @@ module DRAM #(
             WRITE_RESP: begin
                 axi.bvalid = 1'b1;
             end
-
+        
             default: begin
             end
         endcase
