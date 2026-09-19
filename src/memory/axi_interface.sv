@@ -1,3 +1,5 @@
+`ifndef AXI_INTERFACE_SV
+`define AXI_INTERFACE_SV
 interface axi_lite_if();
     // Address Write Channel
     logic [31:0] awaddr; // assert by master to indicate address
@@ -40,3 +42,4 @@ interface axi_lite_if();
     );
 
 endinterface
+`endif

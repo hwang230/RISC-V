@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// Standalone coverage for DRAM tests 0-9 in l2_dram_verification_plan.md.
+// Standalone coverage for DRAM tests 0-9 plus the memory-range boundary case.
 // Compile axi_lite_if and DRAM before this file. The testbench never includes RTL.
 // bresp is deliberately not checked: the present DRAM does not drive it.
 // Only aligned, full-word accesses are supported; partial writes are out of scope.
@@ -45,8 +45,12 @@ module tb_dram #(
     logic [31:0] held_araddr, held_awaddr, held_wdata, held_rdata;
     logic [3:0] held_wstrb;
 
+    function automatic bit address_in_range(input logic [31:0] address);
+        return !$isunknown(address) && address[1:0] == 2'b00 && address < MEM_SIZE;
+    endfunction
+
     task automatic check_address(input logic [31:0] address);
-        if ($isunknown(address) || address[1:0] != 0 || address >= MEM_SIZE)
+        if (!address_in_range(address))
             $fatal(1, "DRAM testbench: invalid address %h", address);
     endtask
 
@@ -332,6 +336,8 @@ module tb_dram #(
         integer aw_delay, w_delay, response_delay;
         if (DRAM_LATENCY < 1 || MEM_SIZE < 'h4004 || MEM_SIZE % 4 != 0)
             $fatal(1, "tb_dram requires DRAM_LATENCY >= 1 and word-aligned MEM_SIZE >= 0x4004");
+        if (!address_in_range(MEM_SIZE - 4) || address_in_range(MEM_SIZE))
+            $fatal(1, "DRAM testbench address-range check does not distinguish the last valid word from the first invalid address");
         if ($value$plusargs("SEED=%d", random_seed)) begin end
         if ($value$plusargs("RANDOM_ITERS=%d", random_transactions)) begin end
         if (random_transactions < 0 || random_transactions > 100000)
@@ -405,6 +411,10 @@ module tb_dram #(
         end
         test_pass(9, "consecutive transactions return correctly to idle");
 
+        write_word(MEM_SIZE - 4, 32'hb0adf00d);
+        read_word(MEM_SIZE - 4);
+        test_pass(10, "last valid word works and first out-of-range address is rejected by the testbench guard");
+
         // Random traffic follows all directed tests, with bounded independent
         // AW/W delays and response backpressure against the same scoreboard.
         for (integer i = 0; i < random_transactions; i = i + 1) begin
@@ -422,7 +432,7 @@ module tb_dram #(
             end
         end
         repeat (3) @(negedge clk);
-        if (tests_passed != 10 || ar_count != r_count || aw_count != w_count ||
+        if (tests_passed != 11 || ar_count != r_count || aw_count != w_count ||
             aw_count != b_count || read_pending || write_pending || address_pending || data_pending ||
             axi.rvalid !== 1'b0 || axi.bvalid !== 1'b0 || dut.state !== 3'd0)
             $fatal(1, "tb_dram: transactions lost/duplicated or DUT failed to return to idle");

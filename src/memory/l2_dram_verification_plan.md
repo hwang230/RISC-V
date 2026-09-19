@@ -316,6 +316,30 @@ Ensure DRAM correctly returns to idle and accepts the next transaction.
 
 ---
 
+## DRAM Test 10 — Memory Region Boundary
+
+For a `MEM_SIZE`-byte DRAM with aligned 32-bit accesses, the highest valid
+address is `MEM_SIZE - 4`; `MEM_SIZE` is the first invalid address.
+
+### Procedure
+
+1. Check that the testbench address guard accepts `MEM_SIZE - 4` and rejects
+   `MEM_SIZE`.
+2. Write and read back the last valid word through the AXI interface.
+3. Keep the normal AXI monitor checking that every accepted address stays in
+   the configured DRAM range.
+
+### Expected Results
+
+- The last valid word can be read and written correctly.
+- The testbench driver refuses to issue the first out-of-range address.
+
+The current DRAM interface has no defined out-of-range response, so this test
+does not send an invalid AXI request to the RTL. Hardware fault behavior remains
+unspecified until the interface defines how an invalid access is reported.
+
+---
+
 ## DRAM Definition of Done
 
 DRAM unit testing passes when:
@@ -325,6 +349,7 @@ DRAM unit testing passes when:
 - AW/W ordering is independent.
 - Responses remain stable under backpressure.
 - Latency counters behave correctly.
+- The last valid aligned word works, and the testbench rejects the first address beyond `MEM_SIZE`.
 - No transaction is duplicated or lost.
 
 ---

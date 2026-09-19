@@ -1,8 +1,14 @@
 # RISC-V
 
-While I have already implemented a RISC-V processor in the context of my computer architecture (ECSE-425) class from McGill using VHDL, I wish to expand this project by implementing further features such as out-of-order execution or push towards superscalar execution by using Verilog. This will also serve as a very good opportunity for me to finally put myself to learning Verilog syntax. On the other hand, this brings us to also learn SystemVerilog, which is super helpful for verification flow by using UVM and SVA. 
+While I have already implemented a RISC-V processor in the context of my computer architecture (ECSE-425) class from McGill using VHDL, I am expanding this project in Verilog/SystemVerilog by adding out-of-order (OOO) execution support and an AXI memory interface, with superscalar execution as a longer-term goal. This will also serve as a very good opportunity for me to finally put myself to learning Verilog syntax. On the other hand, this brings us to also learn SystemVerilog, which is super helpful for verification flow by using UVM and SVA.
 
 Hope I get to commit daily to this project. It will go very slowly but one day surely!
+
+## Project Status
+
+- **Out-of-order (OOO) execution support — in development:** Adding support for executing independent instructions out of program order while preserving correct architectural results.
+- **AXI protocol for the memory interface:** The current memory interface is based on AXI-Lite, with separate read and write channels using valid/ready handshakes. Integration of the memory system is ongoing.
+- **Outstanding transactions — work in progress:** Working on support for multiple memory requests in flight, including tracking pending requests and their responses so a new request can be issued before an earlier one completes.
 
 # ALU Subsystem: Instruction Encoding & Control Logic
 

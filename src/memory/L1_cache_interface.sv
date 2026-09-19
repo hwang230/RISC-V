@@ -1,3 +1,5 @@
+`ifndef L1_CACHE_INTERFACE_SV
+`define L1_CACHE_INTERFACE_SV
 interface l1_cache_if();
     // L1D cache
     // input channels for L1D addr 
@@ -17,6 +19,7 @@ interface l1_cache_if();
     // L1I cache 
     // input channels for L1I addr
     // only fetch/load needs it
+    logic i_read; // assert by cpu to inform read ops
     logic [31:0] iaddr; // assert by cpu fetch when loading instruction
     // output channels for L1I
     logic [31:0] instr; // return by L1I for fetched instruction
@@ -31,8 +34,9 @@ interface l1_cache_if();
 
     // defining the signal for L1I cache
     modport l1i(
-        input iaddr, i_arready, i_rdata, i_rvalid, 
-        output instr, i_waitrequest, i_araddr, i_arvalid, i_rready, i_bready
+        input iaddr, i_read,
+        output instr, i_waitrequest
     ); 
 
 endinterface
+`endif
