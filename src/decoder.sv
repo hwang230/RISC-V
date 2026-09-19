@@ -58,22 +58,34 @@ module decoder(
 
                 // xor
                 else if (cur_funct3 == 3'b100) begin
-                    cur_id_alu_op = ALU_XOR;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_XOR;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
 
                 // or
                 else if (cur_funct3 == 3'b110) begin
-                    cur_id_alu_op = ALU_OR;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_OR;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
 
                 // and
                 else if (cur_funct3 == 3'b111) begin
-                    cur_id_alu_op = ALU_AND;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_AND;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
                 
                 // sll
                 else if (cur_funct3 == 3'b001) begin
-                    cur_id_alu_op = ALU_SLL;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_SLL;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
                 
                 // srl/sra
@@ -89,12 +101,18 @@ module decoder(
 
                 // slt
                 else if (cur_funct3 == 3'b010) begin
-                    cur_id_alu_op = ALU_SLT;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_SLT;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
 
                 // sltu
                 else if (cur_funct3 == 3'b011) begin
-                    cur_id_alu_op = ALU_SLTU;
+                    if (cur_funct7 == '0)
+                        cur_id_alu_op = ALU_SLTU;
+                    else
+                        cur_id_illegal_instr = 1'b1;
                 end
 
                 else begin
@@ -122,13 +140,13 @@ module decoder(
                     cur_id_alu_op = ALU_AND;
                 end
                 else if (cur_funct3 == 3'b001) begin
-                    if (cur_funct7 == 7'b0000000)
+                    if (cur_funct7 == '0)
                         cur_id_alu_op = ALU_SLL;
                     else
                         cur_id_illegal_instr = 1'b1;
                 end
                 else if (cur_funct3 == 3'b101) begin
-                    if (cur_funct7 == 7'b0000000)
+                    if (cur_funct7 == '0)
                         cur_id_alu_op = ALU_SRL;
                     else if (cur_funct7 == 7'b0100000)
                         cur_id_alu_op = ALU_SRA;
@@ -155,7 +173,7 @@ module decoder(
                 cur_id_mem_to_reg_write = 1'b1;
                 cur_id_wb_sel = 2'b01;
                 // load byte
-                if (cur_funct3 == 3'b0) begin
+                if (cur_funct3 == '0) begin
                     cur_id_mem_size = 2'b00;
                 end 
 
@@ -290,5 +308,6 @@ module decoder(
             default: cur_id_illegal_instr = 1'b1;
 
         endcase
+
     end
 endmodule

@@ -4,6 +4,17 @@ package cpu_pkg;
     localparam int XLEN = 32;
     localparam logic [31:0] PC_RESET_VEC = 32'h0000_0000;
 
+    // Common RV32 instruction field layout. The upper seven bits may be
+    // funct7 or immediate bits depending on the instruction format.
+    typedef struct packed {
+        logic [6:0] funct7_or_imm_hi; // instr[31:25]
+        logic [4:0] rs2;              // instr[24:20]
+        logic [4:0] rs1;              // instr[19:15]
+        logic [2:0] funct3;           // instr[14:12]
+        logic [4:0] rd;               // instr[11:7]
+        logic [6:0] opcode;           // instr[6:0]
+    } instr_fields_t;
+
     // --- RV32I Base Opcodes (7-bit) ---
     typedef enum logic [6:0] {
         OP_LUI    = 7'b0110111, // Load Upper Immediate
