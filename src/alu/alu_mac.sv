@@ -1,19 +1,29 @@
 `include "../cpu_pkg.sv"
 import cpu_pkg::*;
 
-module alu_mac(
-    input logic [31:0] rs1_val,
-    input logic [31:0] rs2_val, 
-    input logic [31:0] rd_old_val, 
+module alu_mac #(
+    parameter int unsigned DATA_WIDTH = 32
+)(
+    input logic [DATA_WIDTH-1:0] rs1_val,
+    input logic [DATA_WIDTH-1:0] rs2_val,
+    input logic [DATA_WIDTH-1:0] rd_old_val,
     input alu_op_e alu_op,
-    output logic [31:0] result
+    output logic [DATA_WIDTH-1:0] result
 );
-    logic [63:0] temp;
+    logic [2*DATA_WIDTH-1:0] temp;
+
+    initial begin
+        if (DATA_WIDTH < 1)
+            $fatal(1, "alu_mac DATA_WIDTH must be positive");
+    end
+
     always_comb begin
+        temp = '0;
         case(alu_op)
             ALU_MAC: begin
-                temp = rs1_val * rs2_val;
-                result = temp[31:0] + rd_old_val;
+                temp = {{DATA_WIDTH{1'b0}}, rs1_val} *
+                       {{DATA_WIDTH{1'b0}}, rs2_val};
+                result = temp[DATA_WIDTH-1:0] + rd_old_val;
             end 
             default: result = '0;
         endcase

@@ -1,12 +1,18 @@
 `include "../cpu_pkg.sv"
 import cpu_pkg::*;
 
-module alu_branch(
+module alu_branch #(
+    parameter int unsigned DATA_WIDTH = 32
+)(
     input alu_op_e alu_op,
-    input logic [31:0] rs1_val,
-    input logic [31:0] rs2_val,
-    output logic [31:0] result
+    input logic [DATA_WIDTH-1:0] rs1_val,
+    input logic [DATA_WIDTH-1:0] rs2_val,
+    output logic [DATA_WIDTH-1:0] result
 );
+    initial begin
+        if (DATA_WIDTH < 1)
+            $fatal(1, "alu_branch DATA_WIDTH must be positive");
+    end
     logic temp;
     always_comb begin
         case (alu_op)
@@ -18,7 +24,8 @@ module alu_branch(
             ALU_BGEU:           temp = (rs1_val >= rs2_val);
             default:            temp = 1'b0;
         endcase
-        result = {31'b0, temp};
+        result = '0;
+        result[0] = temp;
     end
     
 endmodule
