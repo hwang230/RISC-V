@@ -27,8 +27,10 @@
         localparam TAG_BITS    = ADDR_WIDTH - INDEX_BITS - OFFSET_BITS;
         localparam WAY_BITS = (NUM_WAYS <= 1) ? 1 : $clog2(NUM_WAYS);
 
+        localparam BYTE_OFFSET_BITS = $clog2(DATA_WIDTH / 8);
         localparam WORDS_PER_LINE   = LINE_SIZE / (DATA_WIDTH / 8);
-        localparam REFILL_CNT_WIDTH = $clog2(WORDS_PER_LINE);
+        localparam WORD_OFFSET_BITS = (WORDS_PER_LINE > 1) ? $clog2(WORDS_PER_LINE) : 1;
+        localparam REFILL_CNT_WIDTH = WORD_OFFSET_BITS;
 
         localparam LAT_CNT_WIDTH = $clog2(LATENCY + 1);
 
@@ -101,22 +103,39 @@
         // ============================================================
         logic [INDEX_BITS-1:0]  write_set_idx;
         logic [TAG_BITS-1:0]    write_tag;
-        logic [OFFSET_BITS-1:0] write_word_off;
+        logic [WORD_OFFSET_BITS-1:0] write_word_off;
 
         logic [INDEX_BITS-1:0]  read_set_idx;
         logic [TAG_BITS-1:0]    read_tag;
-        logic [OFFSET_BITS-1:0] read_word_off;
+        logic [WORD_OFFSET_BITS-1:0] read_word_off;
 
 
         // Write address decode
         assign write_set_idx  = writeaddr[OFFSET_BITS +: INDEX_BITS];
         assign write_tag      = writeaddr[ADDR_WIDTH-1 -: TAG_BITS];
-        assign write_word_off = writeaddr[OFFSET_BITS-1:2];
-
         // Read address decode
         assign read_set_idx  = readaddr[OFFSET_BITS +: INDEX_BITS];
         assign read_tag      = readaddr[ADDR_WIDTH-1 -: TAG_BITS];
-        assign read_word_off = readaddr[OFFSET_BITS-1:2];
+        generate
+            if (WORDS_PER_LINE > 1) begin : gen_word_offsets
+                assign write_word_off = writeaddr[BYTE_OFFSET_BITS +: WORD_OFFSET_BITS];
+                assign read_word_off  = readaddr[BYTE_OFFSET_BITS +: WORD_OFFSET_BITS];
+            end else begin : gen_single_word_line
+                assign write_word_off = '0;
+                assign read_word_off  = '0;
+            end
+        endgenerate
+
+        initial begin
+            if (DATA_WIDTH < 32 || (DATA_WIDTH % 8) != 0 ||
+                (DATA_WIDTH & (DATA_WIDTH - 1)) != 0 ||
+                (LINE_SIZE % (DATA_WIDTH / 8)) != 0 || WORDS_PER_LINE < 1)
+                $fatal(1, "l1d_cache requires a power-of-two DATA_WIDTH >= 32 that divides LINE_SIZE");
+            if ((LINE_SIZE & (LINE_SIZE - 1)) != 0 ||
+                CACHE_SIZE % (LINE_SIZE * NUM_WAYS) != 0 || NUM_SETS < 2 ||
+                (NUM_SETS & (NUM_SETS - 1)) != 0 || TAG_BITS < 1)
+                $fatal(1, "l1d_cache requires power-of-two line/set geometry and a positive tag width");
+        end
 
         // ============================================================
         // AXI HANDSHAKE TRACKING
@@ -370,6 +389,7 @@
             axi.awaddr  = 0;
             axi.wvalid  = 0;
             axi.wdata   = 0;
+            axi.wstrb   = '0;
             axi.bready  = 0;
 
             l1d.d_waitrequest = 1'b0;
@@ -523,6 +543,7 @@
 
                     axi.awvalid = !aw_sent;
                     axi.wvalid  = !w_sent;
+                    axi.wstrb   = '1;
                     axi.bready  = aw_sent && w_sent;
                     l1d.d_waitrequest = 1'b1;
                 end

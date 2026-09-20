@@ -1,18 +1,21 @@
 `ifndef L1_CACHE_INTERFACE_SV
 `define L1_CACHE_INTERFACE_SV
-interface l1_cache_if();
+interface l1_cache_if #(
+    parameter int ADDR_WIDTH = 32,
+    parameter int DATA_WIDTH = 32
+)();
     // L1D cache
     // input channels for L1D addr 
     // used by both load and store
     // load or store depends on opcode 
-    logic [31:0] daddr; // assert by cpu for load and store operation
-    logic [31:0] wdata; // assert by cpu for write operation
+    logic [ADDR_WIDTH-1:0] daddr; // assert by cpu for load and store operation
+    logic [DATA_WIDTH-1:0] wdata; // assert by cpu for write operation
     logic d_write; // assert by cpu instr to determine if write 
     logic d_read; // assert by cpu instr to determine if read
     
     // output channel for L1D addr
     logic [1:0] resp;
-    logic [31:0] data; // return by load operation from L1D
+    logic [DATA_WIDTH-1:0] data; // return by load operation from L1D
     logic d_waitrequest; // stall if not brought down - between OOO CPU and L1D
     
 
@@ -20,9 +23,9 @@ interface l1_cache_if();
     // input channels for L1I addr
     // only fetch/load needs it
     logic i_read; // assert by cpu to inform read ops
-    logic [31:0] iaddr; // assert by cpu fetch when loading instruction
+    logic [ADDR_WIDTH-1:0] iaddr; // assert by cpu fetch when loading instruction
     // output channels for L1I
-    logic [31:0] instr; // return by L1I for fetched instruction
+    logic [DATA_WIDTH-1:0] instr; // aligned memory word containing fetched instruction
     // used between OOO CPU and L1I
     logic i_waitrequest; // stall if not brought down - meaning data not there yet
     

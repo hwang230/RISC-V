@@ -1,12 +1,19 @@
-module tb_imm_gen(output logic done);
+module tb_imm_gen #(
+    parameter integer DATA_WIDTH = 32
+)(output logic done);
     timeunit 1ns;
     timeprecision 1ps;
     import cpu_pkg::*;
 
-    logic [31:0] instr, imm_out;
+    logic [31:0] instr;
+    logic [DATA_WIDTH-1:0] imm_out;
     imm_src_e imm_type;
 
-    imm_gen dut(.instr(instr), .imm_type(imm_type), .imm_out(imm_out));
+    imm_gen #(.DATA_WIDTH(DATA_WIDTH)) dut (
+        .instr(instr),
+        .imm_type(imm_type),
+        .imm_out(imm_out)
+    );
 
     function automatic logic [31:0] encode_i(input logic [11:0] imm);
         encode_i = {imm, 5'd1, 3'b000, 5'd2, 7'b0010011};
@@ -29,14 +36,29 @@ module tb_imm_gen(output logic done);
         encode_j = {imm[20], imm[10:1], imm[11], imm[19:12], 5'd2, 7'b1101111};
     endfunction
 
+    function automatic logic [DATA_WIDTH-1:0] extend_rv32(input logic [31:0] value);
+        logic [DATA_WIDTH-1:0] extended;
+        integer bit_index;
+        begin
+            extended = '0;
+            extended[31:0] = value;
+            if (value[31]) begin
+                for (bit_index = 32; bit_index < DATA_WIDTH; bit_index = bit_index + 1)
+                    extended[bit_index] = 1'b1;
+            end
+            extend_rv32 = extended;
+        end
+    endfunction
+
     task automatic check(input string name, input logic [31:0] instruction,
                         input imm_src_e kind, input logic [31:0] expected);
         instr = instruction;
         imm_type = kind;
         #1;
-        if (imm_out !== expected)
-            $fatal(1, "imm_gen %s: got %08h expected %08h", name, imm_out, expected);
-        $display("PASS: imm_gen %-20s -> %08h", name, imm_out);
+        if (imm_out !== extend_rv32(expected))
+            $fatal(1, "imm_gen DATA_WIDTH=%0d %s: got %h expected %h",
+                   DATA_WIDTH, name, imm_out, extend_rv32(expected));
+        $display("PASS: imm_gen DATA_WIDTH=%0d %-20s -> %h", DATA_WIDTH, name, imm_out);
     endtask
 
     initial begin
@@ -59,7 +81,6 @@ module tb_imm_gen(output logic done);
         check("unknown format", encode_i(12'hfff), imm_src_e'(3'b111), 32'd0);
 
         done = 1'b1;
-        $display("PASS: tb_imm_gen (16 immediate cases)");
+        $display("PASS: tb_imm_gen DATA_WIDTH=%0d (16 immediate cases)", DATA_WIDTH);
     end
-
 endmodule

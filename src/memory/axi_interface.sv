@@ -1,13 +1,16 @@
 `ifndef AXI_INTERFACE_SV
 `define AXI_INTERFACE_SV
-interface axi_lite_if();
+interface axi_lite_if #(
+    parameter int ADDR_WIDTH = 32,
+    parameter int DATA_WIDTH = 32
+)();
     // Address Write Channel
-    logic [31:0] awaddr; // assert by master to indicate address
+    logic [ADDR_WIDTH-1:0] awaddr; // assert by master to indicate address
     logic awvalid; // assert by master to indicate address is valid
     logic awready; // assert by slave to indicate ready to accept address
 
     // Write Data Channel
-    logic [31:0] wdata; // assert by master to indicate the data
+    logic [DATA_WIDTH-1:0] wdata; // assert by master to indicate the data
     logic wvalid; // assert by master when data is valid
     logic wready; // assert by slave when ready to accept data
 
@@ -17,15 +20,15 @@ interface axi_lite_if();
     logic bready; // assert by master when ready to receive response
 
     // Write signal to inform what to store
-    logic [3:0] wstrb; 
+    logic [DATA_WIDTH/8-1:0] wstrb;
     
     // Address Read Channel
-    logic [31:0] araddr; // assert by master to indicate address
+    logic [ADDR_WIDTH-1:0] araddr; // assert by master to indicate address
     logic arvalid; // assert by master to indicate address is valid
     logic arready; // assert by slave to indicate ready to accept address
 
     // Read Data Channel
-    logic [31:0] rdata; // store data here
+    logic [DATA_WIDTH-1:0] rdata; // store data here
     logic rvalid; // assert by slave when data on bus
     logic rready; // assert by master when ready to receive data
 

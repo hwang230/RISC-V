@@ -34,6 +34,7 @@ tclsh test/memory/run_l2_integration.tcl
 tclsh test/memory/run_l1i.tcl
 tclsh test/memory/run_l1d.tcl
 tclsh test/memory/run_memory_subsystem.tcl
+tclsh test/memory/run_memory_widths.tcl
 
 # Check progress as RTL is implemented; lint does not imply simulation passed.
 tclsh test/memory/run_all.tcl --lint-only --keep-going
@@ -88,6 +89,7 @@ continues after a layer fails but still exits nonzero if any layer fails.
 | `tb_l1i.sv` | CPU fetches through real L1I against the controllable backend |
 | `tb_l1d.sv` | CPU loads/stores through real L1D, including dirty eviction and write allocation |
 | `tb_memory_subsystem.sv` | CPU traffic through both real L1 caches, shared L2, and real DRAM |
+| `tb_memory_widths.sv` | L1D/L2/DRAM read, store, dirty eviction, and reload at 32/32, 40/64, and 40/512 address/data widths |
 | `run_common.tcl` | Compile options, input validation, logs, pass/fail handling |
 | `run_*.tcl` | Entry points for each of the six layers and the complete regression |
 
@@ -141,5 +143,11 @@ checks traffic across its L1I/L1D, shared L2, and DRAM hierarchy. Its
 scoreboards also inspect internal cache and AXI state. The legacy
 `L1_cache.sv` was removed; the wrapper includes the current `L1I_cache.sv` and
 `L1D_cache.sv` modules.
+`run_memory_widths.tcl` separately builds that hierarchy with 32-bit addresses
+and data, with 40-bit addresses and 64-bit data, and with 40-bit addresses and
+512-bit data. The final case exercises a single data beat per 64-byte line. The
+width bench checks every data word position in a line, a dirty L1D write,
+eviction to DRAM, reload from the updated backing memory, and an out-of-range
+high address that must not alias the first DRAM word.
 Reduced-latency or reduced-size runs are useful checks but do not replace runs
 with default geometry and production latencies.

@@ -35,19 +35,23 @@ module memory_system #(
     output logic [DATA_WIDTH-1:0] d_rdata,
     output logic                  d_waitrequest
 );
-    // The AXI-Lite and L1 CPU interfaces in this design currently use fixed
-    // 32-bit addresses and words.
+    // The memory hierarchy supports RV32 instruction words on wider buses.
+    // Cache geometry remains fixed for now; address and bus widths propagate
+    // through each interface and hierarchy level.
     initial begin
-        if (ADDR_WIDTH != 32 || DATA_WIDTH != 32)
-            $fatal(1, "memory_system currently requires 32-bit addresses and data");
+        if (ADDR_WIDTH < 32)
+            $fatal(1, "memory_system ADDR_WIDTH must be at least 32");
+        if (DATA_WIDTH < 32 || (DATA_WIDTH % 32) != 0 ||
+            (DATA_WIDTH & (DATA_WIDTH - 1)) != 0 || DATA_WIDTH > LINE_SIZE * 8)
+            $fatal(1, "memory_system DATA_WIDTH must be a power-of-two multiple of 32 that fits in a cache line");
         if (LINE_SIZE != 64 || NUM_WAYS != 4)
             $fatal(1, "memory_system currently requires 64-byte lines and four ways");
     end
 
-    l1_cache_if cpu_if();
-    axi_lite_if axi_l1i_to_l2();
-    axi_lite_if axi_l1d_to_l2();
-    axi_lite_if axi_l2_to_dram();
+    l1_cache_if #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) cpu_if();
+    axi_lite_if #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) axi_l1i_to_l2();
+    axi_lite_if #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) axi_l1d_to_l2();
+    axi_lite_if #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) axi_l2_to_dram();
 
     // Adapt the explicit CPU ports to the shared L1 interface. The L1
     // instruction and data modports drive separate fields of cpu_if.

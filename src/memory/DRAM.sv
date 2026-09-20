@@ -18,6 +18,20 @@ module DRAM #(
     localparam NUM_WORDS = MEM_SIZE / (DATA_WIDTH / 8);
     logic [DATA_WIDTH-1:0] memory [0:NUM_WORDS-1];
     localparam BYTE_OFFSET_BITS = $clog2(DATA_WIDTH / 8);
+    localparam MEM_INDEX_WIDTH = (NUM_WORDS > 1) ? $clog2(NUM_WORDS) : 1;
+
+    logic [MEM_INDEX_WIDTH-1:0] read_word_index;
+    logic [MEM_INDEX_WIDTH-1:0] write_word_index;
+
+    initial begin
+        if (DATA_WIDTH < 8 || (DATA_WIDTH % 8) != 0 ||
+            (DATA_WIDTH & (DATA_WIDTH - 1)) != 0)
+            $fatal(1, "DRAM DATA_WIDTH must be a positive power-of-two multiple of 8");
+        if (ADDR_WIDTH < BYTE_OFFSET_BITS + MEM_INDEX_WIDTH ||
+            MEM_SIZE < DATA_WIDTH / 8 ||
+            (MEM_SIZE % (DATA_WIDTH / 8)) != 0)
+            $fatal(1, "DRAM address width and MEM_SIZE must support complete DATA_WIDTH words");
+    end
     // use =  for combinational logic
     // use <= for sequential logic
 
@@ -36,6 +50,9 @@ module DRAM #(
     logic [ADDR_WIDTH-1:0] writeaddr;
     logic [ADDR_WIDTH-1:0] readaddr; 
     logic [DATA_WIDTH-1:0] readdata;
+
+    assign read_word_index = readaddr[BYTE_OFFSET_BITS +: MEM_INDEX_WIDTH];
+    assign write_word_index = writeaddr[BYTE_OFFSET_BITS +: MEM_INDEX_WIDTH];
 
     // internal signal allowing waddr and wdata to not arrival at the same time
     logic w_received = 1'b0;
@@ -85,7 +102,8 @@ module DRAM #(
 
                 WRITE_WAIT: begin
                     if (latency_count == LATENCY - 1) begin
-                        memory[writeaddr >> BYTE_OFFSET_BITS] <= writedata;
+                        if ((writeaddr >> BYTE_OFFSET_BITS) < ADDR_WIDTH'(NUM_WORDS))
+                            memory[write_word_index] <= writedata;
                         latency_count <= '0;
                         state <= WRITE_RESP;
                     end else begin
@@ -96,7 +114,10 @@ module DRAM #(
                 READ_WAIT: begin
                     // stay in this state until the latency is reached
                     if (latency_count == LATENCY - 1) begin
-                        readdata      <= memory[readaddr >> BYTE_OFFSET_BITS];
+                        if ((readaddr >> BYTE_OFFSET_BITS) < ADDR_WIDTH'(NUM_WORDS))
+                            readdata <= memory[read_word_index];
+                        else
+                            readdata <= '0;
                         latency_count <= '0;
                         state         <= READ_RESP;
                     end else begin

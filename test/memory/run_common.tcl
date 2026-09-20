@@ -23,7 +23,7 @@ proc memory_test::usage {} {
   --help                      Show this help
 
 Individual runners: run_dram.tcl, run_l2_protocol.tcl, run_l2_integration.tcl,
-run_l1i.tcl, run_l1d.tcl, run_memory_subsystem.tcl.}
+run_l1i.tcl, run_l1d.tcl, run_memory_subsystem.tcl, run_memory_widths.tcl.}
 }
 
 proc memory_test::parse {arguments} {
