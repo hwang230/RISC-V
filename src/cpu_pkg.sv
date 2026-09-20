@@ -60,6 +60,7 @@ package cpu_pkg;
         ALU_DIV    = 5'b10100,
         ALU_DIVU   = 5'b10101,
         ALU_REM    = 5'b10110,
+        ALU_REMU   = 5'b10111,
         // Custom Acceleration
         ALU_MAC    = 5'b11000
     } alu_op_e;

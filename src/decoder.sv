@@ -45,8 +45,23 @@ module decoder(
             // REGISTER OPERATION
             OP_ALU_R: begin
                 cur_id_reg_write = 1'b1;
-                // add/sub
-                if (cur_funct3 == 3'b000) begin
+                // RV32M register-register operations use funct7=0000001.
+                if (cur_funct7 == 7'b0000001) begin
+                    case (cur_funct3)
+                        3'b000: cur_id_alu_op = ALU_MUL;
+                        3'b001: cur_id_alu_op = ALU_MULH;
+                        3'b010: cur_id_alu_op = ALU_MULHSU;
+                        3'b011: cur_id_alu_op = ALU_MULHU;
+                        3'b100: cur_id_alu_op = ALU_DIV;
+                        3'b101: cur_id_alu_op = ALU_DIVU;
+                        3'b110: cur_id_alu_op = ALU_REM;
+                        3'b111: cur_id_alu_op = ALU_REMU;
+                        default: cur_id_illegal_instr = 1'b1;
+                    endcase
+                end
+
+                // RV32I register-register operations.
+                else if (cur_funct3 == 3'b000) begin
                     if (cur_funct7 == 7'b0000000) begin
                         cur_id_alu_op = ALU_ADD;
                     end else if (cur_funct7 == 7'b0100000) begin

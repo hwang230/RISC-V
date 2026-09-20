@@ -108,7 +108,7 @@ module alu(
                 alu_result = multiply_result;
             end
 
-            ALU_DIV, ALU_DIVU, ALU_REM: begin
+            ALU_DIV, ALU_DIVU, ALU_REM, ALU_REMU: begin
                 alu_result = div_result;
             end
 

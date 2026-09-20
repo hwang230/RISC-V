@@ -9,29 +9,25 @@ module fetch(
     input logic jump_en,
     input logic [31:0] jump_target, 
 
-    // axi ports
-    output logic [31:0] araddr,
-    output logic arvalid,
-    output logic rready, 
-    input logic [31:0] rdata,
-    input logic arready, 
-    input logic rvalid, 
+    // CPU-side L1I request/response interface. Keep i_read asserted while
+    // i_waitrequest is high; the instruction is returned when it goes low.
+    output logic i_read,
+    output logic [31:0] i_addr,
+    input logic [31:0] i_data,
+    input logic i_waitrequest,
 
     // output what decoder needs -- let decode figure out what goes where
     output logic [31:0] instr, 
     output logic instr_valid
 ); 
     logic [31:0] pc;
-    logic fetch_pending;
 
-    assign araddr  = pc;
-    assign arvalid = !fetch_pending;
-    assign rready  = fetch_pending;
+    assign i_addr = pc;
+    assign i_read = rst_n;
     
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             pc <= PC_RESET_VEC; 
-            fetch_pending <= 1'b0;
             instr <= '0;
             instr_valid <= 1'b0;
         end 
@@ -39,15 +35,14 @@ module fetch(
         else begin
             instr_valid <= 1'b0;
 
-            if (!fetch_pending && arvalid && arready) begin
-                fetch_pending <= 1'b1;
-            end
-
-            if (fetch_pending && rvalid && rready) begin
-                instr <= rdata;
+            // L1I holds i_waitrequest high until its instruction response is
+            // ready. The request address stays stable because PC advances
+            // only when that response is consumed.
+            if (!i_waitrequest) begin
+                instr <= i_data;
+                // should stay in fetch stage until this is true
                 instr_valid <= 1'b1;
                 pc <= jump_en ? jump_target : pc + 32'd4;
-                fetch_pending <= 1'b0;
             end
         end
 

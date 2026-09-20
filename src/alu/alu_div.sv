@@ -35,6 +35,13 @@ module alu_div(
                     result = $signed(rs1_val) % $signed(rs2_val);
             end
 
+            ALU_REMU: begin
+                if (rs2_val == '0)
+                    result = rs1_val;
+                else
+                    result = rs1_val % rs2_val;
+            end
+
             default: result = '0;
         endcase
     end
