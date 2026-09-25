@@ -21,7 +21,9 @@ module fetch #(
 
     // output what decoder needs -- let decode figure out what goes where
     output logic [31:0] instr, 
-    output logic instr_valid
+    output logic instr_valid,
+    // PC associated with the instruction currently held in instr.
+    output logic [ADDR_WIDTH-1:0] instr_pc
 ); 
     localparam int BYTE_OFFSET_BITS = $clog2(DATA_WIDTH / 8);
     localparam int INSTR_LANE_BITS = (DATA_WIDTH > 32) ? $clog2(DATA_WIDTH / 32) : 1;
@@ -55,6 +57,7 @@ module fetch #(
             pc <= ADDR_WIDTH'(PC_RESET_VEC);
             instr <= '0;
             instr_valid <= 1'b0;
+            instr_pc <= '0;
         end 
 
         else begin
@@ -65,6 +68,7 @@ module fetch #(
             // only when that response is consumed.
             if (!i_waitrequest) begin
                 instr <= fetched_instr;
+                instr_pc <= pc;
                 // should stay in fetch stage until this is true
                 instr_valid <= 1'b1;
                 pc <= jump_en ? jump_target : pc + ADDR_WIDTH'(4);

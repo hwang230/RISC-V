@@ -17,6 +17,7 @@ module tb_fetch #(
     logic i_waitrequest;
     logic [31:0] instr;
     logic instr_valid;
+    logic [ADDR_WIDTH-1:0] instr_pc;
     logic [ADDR_WIDTH-1:0] expected_pc;
     logic [31:0] expected_instruction;
 
@@ -63,10 +64,11 @@ module tb_fetch #(
             i_data = response_for_pc(response_pc, selected_instruction);
             i_waitrequest = 1'b0;
             tick();
-            if (!i_read || instr !== selected_instruction || !instr_valid || i_addr !== next_pc)
-                $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: response at %h got instr=%h valid=%b next_addr=%h expected instr=%h next_addr=%h",
+            if (!i_read || instr !== selected_instruction || !instr_valid ||
+                instr_pc !== response_pc || i_addr !== next_pc)
+                $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: response at %h got instr=%h valid=%b instr_pc=%h next_addr=%h expected instr=%h instr_pc=%h next_addr=%h",
                        ADDR_WIDTH, DATA_WIDTH, response_pc, instr, instr_valid,
-                       i_addr, selected_instruction, next_pc);
+                       instr_pc, i_addr, selected_instruction, response_pc, next_pc);
         end
     endtask
 
@@ -81,7 +83,7 @@ module tb_fetch #(
         expected_pc = '0;
 
         tick();
-        if (i_read || i_addr !== '0 || instr !== 32'd0 || instr_valid)
+        if (i_read || i_addr !== '0 || instr !== 32'd0 || instr_pc !== '0 || instr_valid)
             $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: reset state mismatch", ADDR_WIDTH, DATA_WIDTH);
 
         rst_n = 1'b1;
@@ -130,7 +132,7 @@ module tb_fetch #(
         rst_n = 1'b0;
         i_waitrequest = 1'b1;
         tick();
-        if (i_read || i_addr !== '0 || instr !== 32'd0 || instr_valid)
+        if (i_read || i_addr !== '0 || instr !== 32'd0 || instr_pc !== '0 || instr_valid)
             $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: reset during request failed", ADDR_WIDTH, DATA_WIDTH);
 
         done = 1'b1;

@@ -4,8 +4,8 @@ module tb_regfile(output logic done);
 
     logic clk;
     logic we;
-    logic [4:0] rs1_addr, rs2_addr, rd_addr;
-    logic [31:0] rd_data, rs1_data, rs2_data;
+    logic [4:0] rs1_addr, rs2_addr, rd_old_addr, rd_addr;
+    logic [31:0] rd_data, rs1_data, rs2_data, rd_old_data;
     logic small_we;
     logic [2:0] small_rs1_addr, small_rs2_addr, small_rd_addr;
     logic [7:0] small_rd_data, small_rs1_data, small_rs2_data;
@@ -17,10 +17,12 @@ module tb_regfile(output logic done);
         .we(small_we),
         .rs1_addr(small_rs1_addr),
         .rs2_addr(small_rs2_addr),
+        .rd_old_addr(small_rd_addr),
         .rd_addr(small_rd_addr),
         .rd_data(small_rd_data),
         .rs1_data(small_rs1_data),
-        .rs2_data(small_rs2_data)
+        .rs2_data(small_rs2_data),
+        .rd_old_data()
     );
 
     always #5 clk = ~clk;
@@ -35,6 +37,7 @@ module tb_regfile(output logic done);
         we = 1'b0;
         rs1_addr = '0;
         rs2_addr = '0;
+        rd_old_addr = '0;
         rd_addr = '0;
         rd_data = '0;
         small_we = 1'b0;
