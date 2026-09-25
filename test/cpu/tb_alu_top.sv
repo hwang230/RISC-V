@@ -3,17 +3,19 @@ module tb_alu_top(output logic done);
     timeprecision 1ps;
     import cpu_pkg::*;
 
-    logic [31:0] rs1_val, rs2_val, rd_old_val, imm_val, result, address;
-    logic use_imm;
+    logic [31:0] rs1_val, rs2_val, rd_old_val, pc_val, imm_val, result, address;
+    logic use_imm, use_pc;
     alu_op_e alu_op;
 
     alu dut (
         .rs1_val(rs1_val),
         .rs2_val(rs2_val),
         .rd_old_val(rd_old_val),
+        .pc_val(pc_val),
         .imm_val(imm_val),
         .cur_id_alu_op(alu_op),
         .cur_id_alu_src_imm(use_imm),
+        .cur_id_alu_src_pc(use_pc),
         .alu_result(result),
         .alu_addr(address)
     );
@@ -27,6 +29,7 @@ module tb_alu_top(output logic done);
         rd_old_val = old_value;
         imm_val = immediate;
         use_imm = immediate_select;
+        use_pc = 1'b0;
         #1;
         if (result !== expected)
             $fatal(1, "alu %s: got %08h expected %08h", name, result, expected);
@@ -73,6 +76,14 @@ module tb_alu_top(output logic done);
         check("REMU", ALU_REMU, 32'hffff_ffff, 32'd2, 32'd0, 32'd0, 1'b0,
               32'd1);
         check("MAC", ALU_MAC, 32'd3, 32'd4, 32'd5, 32'd0, 1'b0, 32'd17);
+        pc_val = 32'h0000_1000;
+        imm_val = 32'h0000_0200;
+        use_imm = 1'b1;
+        use_pc = 1'b1;
+        alu_op = ALU_ADD;
+        #1;
+        if (result !== 32'h0000_1200)
+            $fatal(1, "alu PC source: got %08h expected 00001200", result);
         check("unknown op", alu_op_e'(5'b11111), 32'd3, 32'd4, 32'd5, 32'd0,
               1'b0, 32'd0);
 

@@ -7,6 +7,7 @@ module fetch #(
 )(
     input logic clk,
     input logic rst_n, 
+    input logic stall,
 
     // to enable jumps
     input logic jump_en,
@@ -50,7 +51,9 @@ module fetch #(
     endgenerate
 
     assign i_addr = pc;
-    assign i_read = rst_n;
+    // Do not issue or consume an instruction while an older data access
+    // stalls the in-order pipeline.
+    assign i_read = rst_n && !stall;
     
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -66,7 +69,7 @@ module fetch #(
             // L1I holds i_waitrequest high until its instruction response is
             // ready. The request address stays stable because PC advances
             // only when that response is consumed.
-            if (!i_waitrequest) begin
+            if (!stall && !i_waitrequest) begin
                 instr <= fetched_instr;
                 instr_pc <= pc;
                 // should stay in fetch stage until this is true

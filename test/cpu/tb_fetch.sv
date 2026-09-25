@@ -9,6 +9,7 @@ module tb_fetch #(
     localparam integer BUS_BYTES = DATA_WIDTH / 8;
 
     logic clk, rst_n;
+    logic stall;
     logic jump_en;
     logic [ADDR_WIDTH-1:0] jump_target;
     logic i_read;
@@ -76,6 +77,7 @@ module tb_fetch #(
         done = 1'b0;
         clk = 1'b0;
         rst_n = 1'b0;
+        stall = 1'b0;
         jump_en = 1'b0;
         jump_target = '0;
         i_data = '0;

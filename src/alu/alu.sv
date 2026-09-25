@@ -17,15 +17,18 @@ module alu #(
     input logic [DATA_WIDTH-1:0] rs1_val,
     input logic [DATA_WIDTH-1:0] rs2_val,
     input logic [DATA_WIDTH-1:0] rd_old_val,
+    input logic [DATA_WIDTH-1:0] pc_val,
     input logic [DATA_WIDTH-1:0] imm_val,
     input alu_op_e cur_id_alu_op, 
     input logic cur_id_alu_src_imm, // to identify usage of immediate value
+    input logic cur_id_alu_src_pc,
 
     // output signal
     output logic [DATA_WIDTH-1:0] alu_result,
     // Address view of the result for load/store effective-address calculation.
     output logic [ADDR_WIDTH-1:0] alu_addr
 ); 
+    logic [DATA_WIDTH-1:0] alu_rs1_val;
     logic [DATA_WIDTH-1:0] alu_rs2_val;
     logic [DATA_WIDTH-1:0] arithmetic_result;
     logic [DATA_WIDTH-1:0] branch_result;
@@ -42,6 +45,7 @@ module alu #(
             $fatal(1, "alu ADDR_WIDTH must be positive");
     end
 
+    assign alu_rs1_val = cur_id_alu_src_pc ? pc_val : rs1_val;
     assign alu_rs2_val = cur_id_alu_src_imm ? imm_val : rs2_val;
     // Arithmetic wraps at DATA_WIDTH. A narrower address keeps the low bits;
     // a wider address zero-extends the unsigned result.
@@ -49,35 +53,35 @@ module alu #(
 
     // modules instantiation
     alu_arithmetic #(.DATA_WIDTH(DATA_WIDTH)) arithmetic_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(arithmetic_result)
     ); 
 
     alu_branch #(.DATA_WIDTH(DATA_WIDTH)) branch_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(branch_result)
     );
 
     alu_div #(.DATA_WIDTH(DATA_WIDTH)) div_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(div_result)
     );
 
     alu_logical #(.DATA_WIDTH(DATA_WIDTH)) logical_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(logical_result)
     );
 
     alu_mac #(.DATA_WIDTH(DATA_WIDTH)) mac_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .rd_old_val(rd_old_val),
         .alu_op(cur_id_alu_op),
@@ -85,14 +89,14 @@ module alu #(
     );
 
     alu_multiply #(.DATA_WIDTH(DATA_WIDTH)) multiply_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(multiply_result)
     );
 
     alu_shift #(.DATA_WIDTH(DATA_WIDTH)) shift_unit(
-        .rs1_val(rs1_val),
+        .rs1_val(alu_rs1_val),
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(shift_result)

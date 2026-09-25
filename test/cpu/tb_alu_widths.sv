@@ -10,13 +10,15 @@ module tb_alu_small_width #(
     localparam int LIMIT = 1 << DATA_WIDTH;
     logic [DATA_WIDTH-1:0] rs1, rs2, old_value, immediate, result;
     logic [ADDR_WIDTH-1:0] address;
-    logic use_imm;
+    logic use_imm, use_pc;
+    logic [DATA_WIDTH-1:0] pc_val;
     alu_op_e op;
     int checks;
 
     alu #(.DATA_WIDTH(DATA_WIDTH), .ADDR_WIDTH(ADDR_WIDTH)) dut (
         .rs1_val(rs1), .rs2_val(rs2), .rd_old_val(old_value), .imm_val(immediate),
-        .cur_id_alu_op(op), .cur_id_alu_src_imm(use_imm),
+        .pc_val(pc_val), .cur_id_alu_op(op), .cur_id_alu_src_imm(use_imm),
+        .cur_id_alu_src_pc(use_pc),
         .alu_result(result), .alu_addr(address)
     );
 
@@ -24,6 +26,7 @@ module tb_alu_small_width #(
         logic [DATA_WIDTH-1:0] expected;
         expected = DATA_WIDTH'(mathematical_result);
         op = operation;
+        use_pc = 1'b0;
         #1;
         if (result !== expected || address !== ADDR_WIDTH'(expected))
             $fatal(1, "alu width=%0d op=%s a=%h b=%h old=%h: result=%h addr=%h expected=%h",
@@ -94,7 +97,8 @@ module tb_alu_widths(output logic done);
     logic done2, done8, done64;
     logic [63:0] rs1, rs2, old_value, immediate, result;
     logic [31:0] address;
-    logic use_imm;
+    logic use_imm, use_pc;
+    logic [63:0] pc_val;
     alu_op_e op;
     int checks;
 
@@ -102,7 +106,8 @@ module tb_alu_widths(output logic done);
     tb_alu_small_width #(.DATA_WIDTH(8)) exhaustive_test(.done(done8));
     alu #(.DATA_WIDTH(64), .ADDR_WIDTH(32)) dut (
         .rs1_val(rs1), .rs2_val(rs2), .rd_old_val(old_value), .imm_val(immediate),
-        .cur_id_alu_op(op), .cur_id_alu_src_imm(use_imm),
+        .pc_val(pc_val), .cur_id_alu_op(op), .cur_id_alu_src_imm(use_imm),
+        .cur_id_alu_src_pc(use_pc),
         .alu_result(result), .alu_addr(address)
     );
 
@@ -115,6 +120,7 @@ module tb_alu_widths(output logic done);
         rs2 = immediate_select ? ~b : b;
         immediate = immediate_select ? b : ~b;
         use_imm = immediate_select;
+        use_pc = 1'b0;
         old_value = accumulator;
         #1;
         if (result !== expected || address !== expected[31:0])
