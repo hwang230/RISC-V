@@ -9,32 +9,46 @@
 import cpu_pkg::*;
 
 module core #(
-    // set up the parameters
     parameter int DATA_WIDTH = 32,
     parameter int ADDR_WIDTH = 32
-
 )(
     input logic clk,
     input logic rst_n
 );
-    /////////////////
-    // fetch stage //
-    /////////////////
-    // fetch stage signals
-    logic                  jump_en; 
+
+    localparam int BYTE_LANES        = DATA_WIDTH / 8;
+    localparam int BYTE_OFFSET_BITS  = $clog2(BYTE_LANES);
+
+    localparam logic [1:0] WB_ALU    = 2'b00;
+    localparam logic [1:0] WB_LOAD   = 2'b01;
+    localparam logic [1:0] WB_PC4    = 2'b10;
+    localparam logic [1:0] WB_IMM    = 2'b11;
+
+    localparam logic [1:0] MEM_BYTE  = 2'b00;
+    localparam logic [1:0] MEM_HALF  = 2'b01;
+    localparam logic [1:0] MEM_WORD  = 2'b10;
+
+    localparam logic [1:0] FWD_REG   = 2'b00;
+    localparam logic [1:0] FWD_MEMWB = 2'b01;
+    localparam logic [1:0] FWD_EXMEM = 2'b10;
+
+    // ------------------------------------------------------------------------
+    // Fetch stage
+    // ------------------------------------------------------------------------
+    logic                  jump_en;
     logic [ADDR_WIDTH-1:0] jump_target;
     logic                  i_read;
     logic [ADDR_WIDTH-1:0] i_addr;
     logic [DATA_WIDTH-1:0] i_data;
     logic                  i_waitrequest;
-    logic [DATA_WIDTH-1:0] instr; 
+    logic [DATA_WIDTH-1:0] instr;
     logic                  instr_valid;
     logic [ADDR_WIDTH-1:0] instr_pc;
     logic                  pipeline_stall;
     logic                  hazard_stall;
     logic                  front_stall;
-    // fetch stage declaration
-    fetch u_fetch(
+
+    fetch u_fetch (
         .clk(clk),
         .rst_n(rst_n),
         .stall(front_stall),
@@ -47,24 +61,25 @@ module core #(
         .instr(instr),
         .instr_valid(instr_valid),
         .instr_pc(instr_pc)
-    ); 
+    );
 
-    ///////////////////
-    // decoder stage //
-    ///////////////////
-    // decoder signals
+    // ------------------------------------------------------------------------
+    // Decode stage
+    // ------------------------------------------------------------------------
     opcode_e cur_opcode;
     logic [2:0] cur_funct3;
     logic [6:0] cur_funct7;
+
     assign cur_opcode = opcode_e'(instr[6:0]);
     assign cur_funct3 = instr[14:12];
     assign cur_funct7 = instr[31:25];
-    alu_op_e    cur_id_alu_op; // identify the alu operation
+
+    alu_op_e    cur_id_alu_op;
     logic       cur_id_mem_read;
     logic       cur_id_mem_write;
-    logic       cur_id_reg_write; 
+    logic       cur_id_reg_write;
     logic       cur_id_mem_to_reg_write;
-    logic       cur_id_alu_src_imm; // to identify usage of immediate value
+    logic       cur_id_alu_src_imm;
     logic       cur_id_alu_src_pc;
     logic       cur_id_branch;
     logic       cur_id_jump;
@@ -77,8 +92,8 @@ module core #(
     logic [1:0] cur_id_mem_size;
     logic       cur_id_mem_unsigned;
     logic       cur_id_illegal_instr;
-    // decoder stage declaration
-    decoder u_decoder(
+
+    decoder u_decoder (
         .cur_opcode(cur_opcode),
         .cur_funct3(cur_funct3),
         .cur_funct7(cur_funct7),
@@ -102,28 +117,26 @@ module core #(
         .cur_id_illegal_instr(cur_id_illegal_instr)
     );
 
-    // imm_gen signals
     logic [DATA_WIDTH-1:0] imm_out;
-    // imm_gen declaration
-    imm_gen u_imm_gen(
+
+    imm_gen u_imm_gen (
         .instr(instr),
         .imm_type(cur_id_imm_type),
         .imm_out(imm_out)
     );
 
-    // Register-file read values feed the execute-stage operands.
+    // Register-file read values are captured into ID/EX below.
     logic [DATA_WIDTH-1:0] rs1_val;
     logic [DATA_WIDTH-1:0] rs2_val;
     logic [DATA_WIDTH-1:0] rd_old_val;
 
-    /////////////
-    // regfile //
-    /////////////
-    // Register write control is carried through the pipeline to writeback.
+    // ------------------------------------------------------------------------
+    // Register file
+    // ------------------------------------------------------------------------
     regfile #(
         .ADDR_WIDTH(5),
         .DATA_WIDTH(DATA_WIDTH)
-    ) u_regfile(
+    ) u_regfile (
         .clk(clk),
         .we(mem_wb_valid && mem_wb_reg_write),
         .rs1_addr(instr[19:15]),
@@ -134,19 +147,18 @@ module core #(
         .rs1_data(rs1_val),
         .rs2_data(rs2_val),
         .rd_old_data(rd_old_val)
-    ); 
-    ///////////////
-    // alu stage //
-    ///////////////
-    // alu signals
-    // cur_id_alu_op and cur_id_alu_src_imm already defined prior
+    );
+
+    // ------------------------------------------------------------------------
+    // Execute stage
+    // ------------------------------------------------------------------------
     logic [DATA_WIDTH-1:0] alu_result;
     logic [ADDR_WIDTH-1:0] alu_addr;
 
     alu #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH)
-    ) u_alu(
+    ) u_alu (
         .rs1_val(execute_rs1_val),
         .rs2_val(execute_rs2_val),
         .rd_old_val(execute_rd_old_val),
@@ -159,25 +171,18 @@ module core #(
         .alu_addr(alu_addr)
     );
 
-    //////////////////
-    // memory stage //
-    //////////////////
-    // memory system L1I path signals
-    // logic                  i_read; 
-    // logic [ADDR_WIDTH-1:0] i_addr;
-    // logic [DATA_WIDTH-1:0]  i_data;
-    // logic                  i_waitrequest; 
-
-    // memory system L1D path signals
+    // ------------------------------------------------------------------------
+    // Memory stage
+    // ------------------------------------------------------------------------
     logic                  d_read;
     logic                  d_write;
     logic [ADDR_WIDTH-1:0] d_addr;
     logic [DATA_WIDTH-1:0] d_wdata;
-    logic [DATA_WIDTH/8-1:0] d_wstrb;
+    logic [BYTE_LANES-1:0]  d_wstrb;
     logic [DATA_WIDTH-1:0] d_rdata;
     logic                  d_waitrequest;
-    
-    memory_system u_memory_system(
+
+    memory_system u_memory_system (
         .clk(clk),
         .rst_n(rst_n),
         .i_read(i_read),
@@ -193,11 +198,11 @@ module core #(
         .d_waitrequest(d_waitrequest)
     );
 
-    // ============================================================
+    // ------------------------------------------------------------------------
     // Pipeline registers
-    // ============================================================
+    // ------------------------------------------------------------------------
 
-    // ID/EX: decoded instruction and values consumed by execute.
+    // ID/EX: decoded instruction and operands consumed by execute.
     logic                  id_ex_valid;
     logic [4:0]            id_ex_rd;
     logic [4:0]            id_ex_rs1_addr;
@@ -222,7 +227,7 @@ module core #(
     logic [1:0]            id_ex_wb_sel;
     logic                  id_ex_illegal_instr;
 
-    // Forwarded execute-stage operands and hazard controls.
+    // Forwarding and hazard controls.
     logic [DATA_WIDTH-1:0] execute_rs1_val;
     logic [DATA_WIDTH-1:0] execute_rs2_val;
     logic [DATA_WIDTH-1:0] execute_rd_old_val;
@@ -231,7 +236,7 @@ module core #(
     logic [1:0]            forward_rs2_sel;
     logic [1:0]            forward_rd_old_sel;
 
-    // EX/MEM: execute result and controls consumed by data memory.
+    // EX/MEM: execute results and controls consumed by data memory.
     logic                  ex_mem_valid;
     logic [4:0]            ex_mem_rd;
     logic [DATA_WIDTH-1:0] ex_mem_alu_result;
@@ -247,7 +252,7 @@ module core #(
     logic [1:0]            ex_mem_wb_sel;
     logic                  ex_mem_illegal_instr;
 
-    // MEM/WB: values and controls consumed by register writeback.
+    // MEM/WB: values and controls consumed by writeback.
     logic                  mem_wb_valid;
     logic [4:0]            mem_wb_rd;
     logic [DATA_WIDTH-1:0] mem_wb_alu_result;
@@ -261,29 +266,30 @@ module core #(
     logic [1:0]            mem_wb_sel;
     logic                  mem_wb_illegal_instr;
 
-    // Final value written to the register file.
+    // Writeback formatting.
     logic [DATA_WIDTH-1:0] wb_data;
     logic [DATA_WIDTH-1:0] load_data_formatted;
     logic [7:0]             load_byte;
     logic [15:0]            load_half;
     logic [31:0]            load_word;
     // Pipeline advance controls.
-    // fetch_enable reflects when the instruction request can complete;
-    // decode_enable prevents a waiting fetch or data access from accepting a
-    // new instruction; memory_advance prevents overwriting a stalled memory
-    // transaction and its eventual writeback data.
+    // A data-side wait request stalls the front end and holds EX/MEM. A
+    // load-use hazard stalls only the front end and inserts an ID/EX bubble.
     logic fetch_enable;
     logic decode_enable;
     logic memory_advance;
 
+    // ------------------------------------------------------------------------
+    // Memory request and pipeline control signals
+    // ------------------------------------------------------------------------
     assign d_read  = ex_mem_valid && ex_mem_mem_read;
     assign d_write = ex_mem_valid && ex_mem_mem_write;
     assign d_addr  = ex_mem_alu_result;
     assign pipeline_stall = rst_n && d_waitrequest;
     assign front_stall = pipeline_stall || hazard_stall;
 
-    // A load result is not available in EX/MEM. All other register-writing
-    // results can be forwarded from there; MEM/WB supplies the final value
+    // A load result is not available until MEM/WB. All other register-writing
+    // results can be forwarded from EX/MEM; MEM/WB supplies the final value
     // for loads and older instructions.
     assign hazard_stall = rst_n && instr_valid && id_ex_valid &&
                           id_ex_mem_read && (id_ex_rd != 5'd0) &&
@@ -294,51 +300,51 @@ module core #(
     always_comb begin
         ex_mem_forward_data = '0;
         case (ex_mem_wb_sel)
-            2'b00: ex_mem_forward_data = ex_mem_alu_result;
-            2'b10: ex_mem_forward_data = DATA_WIDTH'(ex_mem_instr_pc) + DATA_WIDTH'(4);
-            2'b11: ex_mem_forward_data = ex_mem_imm_out;
+            WB_ALU: ex_mem_forward_data = ex_mem_alu_result;
+            WB_PC4: ex_mem_forward_data = DATA_WIDTH'(ex_mem_instr_pc) + DATA_WIDTH'(4);
+            WB_IMM: ex_mem_forward_data = ex_mem_imm_out;
             default: ex_mem_forward_data = '0;
         endcase
 
-        forward_rs1_sel = 2'b00;
-        forward_rs2_sel = 2'b00;
-        forward_rd_old_sel = 2'b00;
+        forward_rs1_sel = FWD_REG;
+        forward_rs2_sel = FWD_REG;
+        forward_rd_old_sel = FWD_REG;
 
         if (id_ex_valid && ex_mem_valid && ex_mem_reg_write &&
             !ex_mem_mem_read && (ex_mem_rd != 5'd0)) begin
             if (ex_mem_rd == id_ex_rs1_addr)
-                forward_rs1_sel = 2'b10;
+                forward_rs1_sel = FWD_EXMEM;
             if (ex_mem_rd == id_ex_rs2_addr)
-                forward_rs2_sel = 2'b10;
+                forward_rs2_sel = FWD_EXMEM;
             if (ex_mem_rd == id_ex_rd)
-                forward_rd_old_sel = 2'b10;
+                forward_rd_old_sel = FWD_EXMEM;
         end
 
         if (id_ex_valid && mem_wb_valid && mem_wb_reg_write &&
             (mem_wb_rd != 5'd0)) begin
-            if ((forward_rs1_sel == 2'b00) && (mem_wb_rd == id_ex_rs1_addr))
-                forward_rs1_sel = 2'b01;
-            if ((forward_rs2_sel == 2'b00) && (mem_wb_rd == id_ex_rs2_addr))
-                forward_rs2_sel = 2'b01;
-            if ((forward_rd_old_sel == 2'b00) && (mem_wb_rd == id_ex_rd))
-                forward_rd_old_sel = 2'b01;
+            if ((forward_rs1_sel == FWD_REG) && (mem_wb_rd == id_ex_rs1_addr))
+                forward_rs1_sel = FWD_MEMWB;
+            if ((forward_rs2_sel == FWD_REG) && (mem_wb_rd == id_ex_rs2_addr))
+                forward_rs2_sel = FWD_MEMWB;
+            if ((forward_rd_old_sel == FWD_REG) && (mem_wb_rd == id_ex_rd))
+                forward_rd_old_sel = FWD_MEMWB;
         end
 
         case (forward_rs1_sel)
-            2'b10: execute_rs1_val = ex_mem_forward_data;
-            2'b01: execute_rs1_val = wb_data;
+            FWD_EXMEM: execute_rs1_val = ex_mem_forward_data;
+            FWD_MEMWB: execute_rs1_val = wb_data;
             default: execute_rs1_val = id_ex_rs1_val;
         endcase
 
         case (forward_rs2_sel)
-            2'b10: execute_rs2_val = ex_mem_forward_data;
-            2'b01: execute_rs2_val = wb_data;
+            FWD_EXMEM: execute_rs2_val = ex_mem_forward_data;
+            FWD_MEMWB: execute_rs2_val = wb_data;
             default: execute_rs2_val = id_ex_rs2_val;
         endcase
 
         case (forward_rd_old_sel)
-            2'b10: execute_rd_old_val = ex_mem_forward_data;
-            2'b01: execute_rd_old_val = wb_data;
+            FWD_EXMEM: execute_rd_old_val = ex_mem_forward_data;
+            FWD_MEMWB: execute_rd_old_val = wb_data;
             default: execute_rd_old_val = id_ex_rd_old_val;
         endcase
     end
@@ -349,22 +355,22 @@ module core #(
         d_wstrb = '0;
 
         case (ex_mem_mem_size)
-            2'b00: begin
-                d_wdata[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8 +: 8]
+            MEM_BYTE: begin
+                d_wdata[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8 +: 8]
                     = ex_mem_rs2_val[7:0];
-                d_wstrb[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0]] = 1'b1;
+                d_wstrb[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0]] = 1'b1;
             end
 
-            2'b01: begin
-                d_wdata[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8 +: 16]
+            MEM_HALF: begin
+                d_wdata[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8 +: 16]
                     = ex_mem_rs2_val[15:0];
-                d_wstrb[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0] +: 2] = 2'b11;
+                d_wstrb[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] +: 2] = 2'b11;
             end
 
-            2'b10: begin
-                d_wdata[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8 +: 32]
+            MEM_WORD: begin
+                d_wdata[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8 +: 32]
                     = ex_mem_rs2_val[31:0];
-                d_wstrb[ex_mem_alu_result[$clog2(DATA_WIDTH / 8)-1:0] +: 4] = 4'b1111;
+                d_wstrb[ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] +: 4] = 4'b1111;
             end
 
             default: begin
@@ -396,10 +402,10 @@ module core #(
             id_ex_mem_read           <= 1'b0;
             id_ex_mem_write          <= 1'b0;
             id_ex_mem_to_reg_write   <= 1'b0;
-            id_ex_mem_size           <= 2'b10;
+            id_ex_mem_size           <= MEM_WORD;
             id_ex_mem_unsigned       <= 1'b0;
             id_ex_reg_write          <= 1'b0;
-            id_ex_wb_sel             <= 2'b00;
+            id_ex_wb_sel             <= WB_ALU;
             id_ex_illegal_instr      <= 1'b0;
 
             // EX/MEM reset
@@ -412,10 +418,10 @@ module core #(
             ex_mem_mem_read          <= 1'b0;
             ex_mem_mem_write         <= 1'b0;
             ex_mem_mem_to_reg_write  <= 1'b0;
-            ex_mem_mem_size          <= 2'b10;
+            ex_mem_mem_size          <= MEM_WORD;
             ex_mem_mem_unsigned      <= 1'b0;
             ex_mem_reg_write         <= 1'b0;
-            ex_mem_wb_sel            <= 2'b00;
+            ex_mem_wb_sel            <= WB_ALU;
             ex_mem_illegal_instr     <= 1'b0;
 
             // MEM/WB reset
@@ -426,33 +432,27 @@ module core #(
             mem_wb_imm_out            <= '0;
             mem_wb_instr_pc           <= '0;
             mem_wb_mem_to_reg_write   <= 1'b0;
-            mem_wb_mem_size           <= 2'b10;
+            mem_wb_mem_size           <= MEM_WORD;
             mem_wb_mem_unsigned       <= 1'b0;
             mem_wb_reg_write          <= 1'b0;
-            mem_wb_sel                <= 2'b00;
+            mem_wb_sel                <= WB_ALU;
             mem_wb_illegal_instr      <= 1'b0;
 
         end else begin
-            // FETCH STAGE
-            
-            // DECODE STAGE
+            // ID/EX: accept a decoded instruction, or insert a bubble when
+            // the front end is stalled or execute redirects the fetch PC.
             if (decode_enable) begin
                 id_ex_valid <= 1'b1;
-                // decoder 
                 id_ex_wb_sel <= cur_id_wb_sel;
                 id_ex_reg_write <= cur_id_reg_write;
                 id_ex_rd <= instr[11:7];
                 id_ex_rs1_addr <= instr[19:15];
                 id_ex_rs2_addr <= instr[24:20];
-                // imm value
                 id_ex_imm_out <= imm_out;
-                // fetch
                 id_ex_instr_pc <= instr_pc;
-                // register values
                 id_ex_rs1_val <= rs1_val;
                 id_ex_rs2_val <= rs2_val;
                 id_ex_rd_old_val <= rd_old_val;
-                // alu signals
                 id_ex_alu_op <= cur_id_alu_op;
                 id_ex_alu_src_imm <= cur_id_alu_src_imm;
                 id_ex_alu_src_pc <= cur_id_alu_src_pc;
@@ -465,15 +465,13 @@ module core #(
                 id_ex_mem_size <= cur_id_mem_size;
                 id_ex_mem_unsigned <= cur_id_mem_unsigned;
                 id_ex_illegal_instr <= cur_id_illegal_instr;
-            end
-            else if (!d_waitrequest) begin
+            end else if (!pipeline_stall) begin
                 // No fetched instruction this cycle: insert a bubble.
                 id_ex_valid <= 1'b0;
 
-                // A taken control-flow instruction invalidates only the
-                // younger instruction that would otherwise enter ID/EX.
-                // EX/MEM and MEM/WB continue advancing below.
                 if (jump_en || hazard_stall) begin
+                    // Clear the remaining ID/EX state so a redirected or
+                    // stalled instruction cannot create side effects later.
                     id_ex_rd                 <= 5'b0;
                     id_ex_rs1_addr           <= 5'b0;
                     id_ex_rs2_addr           <= 5'b0;
@@ -491,15 +489,15 @@ module core #(
                     id_ex_mem_read           <= 1'b0;
                     id_ex_mem_write          <= 1'b0;
                     id_ex_mem_to_reg_write  <= 1'b0;
-                    id_ex_mem_size           <= 2'b10;
+                    id_ex_mem_size           <= MEM_WORD;
                     id_ex_mem_unsigned       <= 1'b0;
                     id_ex_reg_write          <= 1'b0;
-                    id_ex_wb_sel             <= 2'b00;
+                    id_ex_wb_sel             <= WB_ALU;
                     id_ex_illegal_instr      <= 1'b0;
                 end
             end
 
-            // EXECUTE STAGE
+            // EX/MEM: advance only when the data-side request is not stalled.
             if (memory_advance) begin
                 ex_mem_valid <= id_ex_valid;
                 ex_mem_wb_sel <= id_ex_wb_sel;
@@ -517,7 +515,7 @@ module core #(
                 ex_mem_rs2_val <= execute_rs2_val;
             end
 
-            // MEMORY STAGE
+            // MEM/WB: capture the memory response and writeback metadata.
             if (memory_advance) begin
                 mem_wb_valid <= ex_mem_valid;
                 mem_wb_sel <= ex_mem_wb_sel;
@@ -532,14 +530,16 @@ module core #(
                 mem_wb_illegal_instr <= ex_mem_illegal_instr;
                 mem_wb_d_rdata <= d_rdata;
             end else begin
-                // The current MEM/WB instruction retires on this clock edge;
-                // do not keep it valid while the older memory request stalls.
+                // The current MEM/WB instruction retires on this edge. Do not
+                // keep it valid while an older memory request is stalled.
                 mem_wb_valid <= 1'b0;
             end
         end    
     end
 
-    // Pipeline controls and writeback mux.
+    // ------------------------------------------------------------------------
+    // Control-flow resolution
+    // ------------------------------------------------------------------------
     always_comb begin
         fetch_enable = rst_n && !i_waitrequest && !front_stall;
         memory_advance = rst_n && !pipeline_stall;
@@ -570,30 +570,34 @@ module core #(
 
         // Do not allow the sequentially fetched instruction into ID/EX on
         // the same cycle that execute redirects fetch.
-        decode_enable = rst_n && fetch_enable && instr_valid &&
-                        !front_stall && !jump_en;
+        decode_enable = fetch_enable && instr_valid && !jump_en;
+    end
 
-        load_byte = d_rdata[(mem_wb_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8) +: 8];
-        load_half = d_rdata[(mem_wb_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8) +: 16];
-        load_word = d_rdata[(mem_wb_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8) +: 32];
+    // ------------------------------------------------------------------------
+    // Load formatting and writeback selection
+    // ------------------------------------------------------------------------
+    always_comb begin
+        load_byte = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 8];
+        load_half = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 16];
+        load_word = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 32];
         load_data_formatted = '0;
 
         case (mem_wb_mem_size)
-            2'b00: begin
+            MEM_BYTE: begin
                 if (mem_wb_mem_unsigned)
                     load_data_formatted = {{(DATA_WIDTH-8){1'b0}}, load_byte};
                 else
                     load_data_formatted = {{(DATA_WIDTH-8){load_byte[7]}}, load_byte};
             end
 
-            2'b01: begin
+            MEM_HALF: begin
                 if (mem_wb_mem_unsigned)
                     load_data_formatted = {{(DATA_WIDTH-16){1'b0}}, load_half};
                 else
                     load_data_formatted = {{(DATA_WIDTH-16){load_half[15]}}, load_half};
             end
 
-            2'b10: begin
+            MEM_WORD: begin
                 load_data_formatted = {{(DATA_WIDTH-32){load_word[31]}}, load_word};
             end
 
@@ -605,19 +609,19 @@ module core #(
         wb_data = '0;
 
         case (mem_wb_sel)
-            2'b00: begin
+            WB_ALU: begin
                 wb_data = mem_wb_alu_result;
             end
 
-            2'b01: begin
+            WB_LOAD: begin
                 wb_data = load_data_formatted;
             end
 
-            2'b10: begin
+            WB_PC4: begin
                 wb_data = DATA_WIDTH'(mem_wb_instr_pc) + DATA_WIDTH'(4);
             end
 
-            2'b11: begin
+            WB_IMM: begin
                 wb_data = mem_wb_imm_out;
             end
 
