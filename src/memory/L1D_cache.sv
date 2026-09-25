@@ -95,6 +95,7 @@
         logic [ADDR_WIDTH-1:0] readaddr;
 
         logic [DATA_WIDTH-1:0] writedata;
+        logic [DATA_WIDTH/8-1:0] writestrb;
         logic [DATA_WIDTH-1:0] readdata;
 
         
@@ -163,6 +164,7 @@
                 writeaddr <= '0;
                 readdata  <= '0;
                 writedata <= '0;
+                writestrb <= '0;
                 ar_sent   <= 1'b0;
                 aw_sent   <= 1'b0;
                 w_sent    <= 1'b0;
@@ -184,6 +186,7 @@
                         if (l1d.d_write) begin
                             state <= WRITE_WAIT;
                             writedata <= l1d.wdata; 
+                            writestrb <= l1d.wstrb;
                             writeaddr <= l1d.daddr;
                         end else if (l1d.d_read) begin
                             state <= READ_WAIT;
@@ -273,8 +276,13 @@
 
                             if (hit) begin
                                 state <= WRITE_RESP;
-                                data_array[write_set_idx][hit_way]
-                                [write_word_off * DATA_WIDTH +: DATA_WIDTH] <= writedata;
+                                for (int byte_index = 0; byte_index < DATA_WIDTH / 8; byte_index++) begin
+                                    if (writestrb[byte_index]) begin
+                                        data_array[write_set_idx][hit_way]
+                                        [write_word_off * DATA_WIDTH + byte_index * 8 +: 8]
+                                            <= writedata[byte_index * 8 +: 8];
+                                    end
+                                end
                                 // L1D is writeback, need to update dirty
                                 dirty_array[write_set_idx][hit_way] <= 1'b1;
                                 // update LRU
@@ -338,10 +346,15 @@
                                 <= axi.rdata;
 
                             // if this is the originally requested word
-                            if (refill_count == write_word_off)
-                                data_array[write_set_idx][miss_way]
-                                    [refill_count * DATA_WIDTH +: DATA_WIDTH]
-                                <= writedata;
+                            if (refill_count == write_word_off) begin
+                                for (int byte_index = 0; byte_index < DATA_WIDTH / 8; byte_index++) begin
+                                    if (writestrb[byte_index]) begin
+                                        data_array[write_set_idx][miss_way]
+                                        [refill_count * DATA_WIDTH + byte_index * 8 +: 8]
+                                            <= writedata[byte_index * 8 +: 8];
+                                    end
+                                end
+                            end
 
                             // reached end of cache line transfer
                             if (refill_count == WORDS_PER_LINE - 1) begin

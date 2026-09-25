@@ -26,6 +26,7 @@ module tb_memory_widths #(
     logic d_write = 1'b0;
     logic [ADDR_WIDTH-1:0] d_addr = '0;
     logic [DATA_WIDTH-1:0] d_wdata = '0;
+    logic [DATA_WIDTH/8-1:0] d_wstrb = '1;
     logic [DATA_WIDTH-1:0] d_rdata;
     logic d_waitrequest;
 
@@ -53,6 +54,7 @@ module tb_memory_widths #(
         .d_write(d_write),
         .d_addr(d_addr),
         .d_wdata(d_wdata),
+        .d_wstrb(d_wstrb),
         .d_rdata(d_rdata),
         .d_waitrequest(d_waitrequest)
     );

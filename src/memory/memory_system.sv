@@ -32,6 +32,7 @@ module memory_system #(
     input  logic                  d_write,
     input  logic [ADDR_WIDTH-1:0] d_addr,
     input  logic [DATA_WIDTH-1:0] d_wdata,
+    input  logic [DATA_WIDTH/8-1:0] d_wstrb,
     output logic [DATA_WIDTH-1:0] d_rdata,
     output logic                  d_waitrequest
 );
@@ -64,6 +65,7 @@ module memory_system #(
     assign cpu_if.d_write = d_write;
     assign cpu_if.daddr = d_addr;
     assign cpu_if.wdata = d_wdata;
+    assign cpu_if.wstrb = d_wstrb;
     assign d_rdata = cpu_if.data;
     assign d_waitrequest = cpu_if.d_waitrequest;
 

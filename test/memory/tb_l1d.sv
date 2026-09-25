@@ -251,7 +251,7 @@ module tb_l1d #(
         if (clk !== 1'b0) @(negedge clk);
         if (int'(dut.state) != 0 || active) $fatal(1, "L1D failed to return idle");
         before_completed = completed;
-        cpu.daddr = address; cpu.wdata = data;
+        cpu.daddr = address; cpu.wdata = data; cpu.wstrb = '1;
         cpu.d_write = is_write; cpu.d_read = !is_write || both_requests;
         @(posedge clk);
         @(negedge clk);
@@ -436,7 +436,7 @@ module tb_l1d #(
             $dumpfile(wave_file);
             $dumpvars(0, tb_l1d);
         end
-        cpu.daddr = 0; cpu.wdata = 0; cpu.d_read = 0; cpu.d_write = 0;
+        cpu.daddr = 0; cpu.wdata = 0; cpu.wstrb = '1; cpu.d_read = 0; cpu.d_write = 0;
         cpu.iaddr = 0; cpu.i_read = 0;
         for (int word_index = 0; word_index < NUM_WORDS; word_index++) begin
             architectural[word_index] = initial_word(word_index);

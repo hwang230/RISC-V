@@ -10,6 +10,7 @@ interface l1_cache_if #(
     // load or store depends on opcode 
     logic [ADDR_WIDTH-1:0] daddr; // assert by cpu for load and store operation
     logic [DATA_WIDTH-1:0] wdata; // assert by cpu for write operation
+    logic [DATA_WIDTH/8-1:0] wstrb; // byte lanes written by a store
     logic d_write; // assert by cpu instr to determine if write 
     logic d_read; // assert by cpu instr to determine if read
     
@@ -31,7 +32,7 @@ interface l1_cache_if #(
     
     // defining the signal for L1D cache
     modport l1d(
-        input daddr, wdata, d_write, d_read, 
+        input daddr, wdata, wstrb, d_write, d_read, 
         output resp, data, d_waitrequest
     ); 
 

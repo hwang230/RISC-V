@@ -31,6 +31,7 @@ module tb_memory_subsystem #(
     logic [31:0] i_addr = 0, i_data;
     logic d_read = 0, d_write = 0, d_waitrequest;
     logic [31:0] d_addr = DATA_BASE, d_wdata = 0, d_rdata;
+    logic [3:0] d_wstrb = '1;
     always #5 clk = ~clk;
 
     memory_system #(
@@ -51,6 +52,7 @@ module tb_memory_subsystem #(
         .d_write(d_write),
         .d_addr(d_addr),
         .d_wdata(d_wdata),
+        .d_wstrb(d_wstrb),
         .d_rdata(d_rdata),
         .d_waitrequest(d_waitrequest)
     );
