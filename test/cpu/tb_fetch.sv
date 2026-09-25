@@ -65,7 +65,7 @@ module tb_fetch #(
             i_data = response_for_pc(response_pc, selected_instruction);
             i_waitrequest = 1'b0;
             tick();
-            if (!i_read || instr !== selected_instruction || !instr_valid ||
+            if (i_read || instr !== selected_instruction || !instr_valid ||
                 instr_pc !== response_pc || i_addr !== next_pc)
                 $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: response at %h got instr=%h valid=%b instr_pc=%h next_addr=%h expected instr=%h instr_pc=%h next_addr=%h",
                        ADDR_WIDTH, DATA_WIDTH, response_pc, instr, instr_valid,

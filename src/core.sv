@@ -31,11 +31,13 @@ module core #(
     logic                  instr_valid;
     logic [ADDR_WIDTH-1:0] instr_pc;
     logic                  pipeline_stall;
+    logic                  hazard_stall;
+    logic                  front_stall;
     // fetch stage declaration
     fetch u_fetch(
         .clk(clk),
         .rst_n(rst_n),
-        .stall(pipeline_stall),
+        .stall(front_stall),
         .jump_en(jump_en),
         .jump_target(jump_target),
         .i_read(i_read),
@@ -67,6 +69,9 @@ module core #(
     logic       cur_id_branch;
     logic       cur_id_jump;
     logic       cur_id_jalr;
+    logic       cur_id_uses_rs1;
+    logic       cur_id_uses_rs2;
+    logic       cur_id_uses_rd_old;
     imm_src_e   cur_id_imm_type;
     logic [1:0] cur_id_wb_sel;
     logic [1:0] cur_id_mem_size;
@@ -87,6 +92,9 @@ module core #(
         .cur_id_branch(cur_id_branch),
         .cur_id_jump(cur_id_jump),
         .cur_id_jalr(cur_id_jalr),
+        .cur_id_uses_rs1(cur_id_uses_rs1),
+        .cur_id_uses_rs2(cur_id_uses_rs2),
+        .cur_id_uses_rd_old(cur_id_uses_rd_old),
         .cur_id_imm_type(cur_id_imm_type),
         .cur_id_wb_sel(cur_id_wb_sel),
         .cur_id_mem_size(cur_id_mem_size),
@@ -139,9 +147,9 @@ module core #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH)
     ) u_alu(
-        .rs1_val(id_ex_rs1_val),
-        .rs2_val(id_ex_rs2_val),
-        .rd_old_val(id_ex_rd_old_val),
+        .rs1_val(execute_rs1_val),
+        .rs2_val(execute_rs2_val),
+        .rd_old_val(execute_rd_old_val),
         .pc_val(DATA_WIDTH'(id_ex_instr_pc)),
         .imm_val(id_ex_imm_out),
         .cur_id_alu_op(id_ex_alu_op),
@@ -192,6 +200,8 @@ module core #(
     // ID/EX: decoded instruction and values consumed by execute.
     logic                  id_ex_valid;
     logic [4:0]            id_ex_rd;
+    logic [4:0]            id_ex_rs1_addr;
+    logic [4:0]            id_ex_rs2_addr;
     logic [DATA_WIDTH-1:0] id_ex_rs1_val;
     logic [DATA_WIDTH-1:0] id_ex_rs2_val;
     logic [DATA_WIDTH-1:0] id_ex_rd_old_val;
@@ -211,6 +221,15 @@ module core #(
     logic                  id_ex_reg_write;
     logic [1:0]            id_ex_wb_sel;
     logic                  id_ex_illegal_instr;
+
+    // Forwarded execute-stage operands and hazard controls.
+    logic [DATA_WIDTH-1:0] execute_rs1_val;
+    logic [DATA_WIDTH-1:0] execute_rs2_val;
+    logic [DATA_WIDTH-1:0] execute_rd_old_val;
+    logic [DATA_WIDTH-1:0] ex_mem_forward_data;
+    logic [1:0]            forward_rs1_sel;
+    logic [1:0]            forward_rs2_sel;
+    logic [1:0]            forward_rd_old_sel;
 
     // EX/MEM: execute result and controls consumed by data memory.
     logic                  ex_mem_valid;
@@ -261,6 +280,68 @@ module core #(
     assign d_write = ex_mem_valid && ex_mem_mem_write;
     assign d_addr  = ex_mem_alu_result;
     assign pipeline_stall = rst_n && d_waitrequest;
+    assign front_stall = pipeline_stall || hazard_stall;
+
+    // A load result is not available in EX/MEM. All other register-writing
+    // results can be forwarded from there; MEM/WB supplies the final value
+    // for loads and older instructions.
+    assign hazard_stall = rst_n && instr_valid && id_ex_valid &&
+                          id_ex_mem_read && (id_ex_rd != 5'd0) &&
+                          ((cur_id_uses_rs1 && (id_ex_rd == instr[19:15])) ||
+                           (cur_id_uses_rs2 && (id_ex_rd == instr[24:20])) ||
+                           (cur_id_uses_rd_old && (id_ex_rd == instr[11:7])));
+
+    always_comb begin
+        ex_mem_forward_data = '0;
+        case (ex_mem_wb_sel)
+            2'b00: ex_mem_forward_data = ex_mem_alu_result;
+            2'b10: ex_mem_forward_data = DATA_WIDTH'(ex_mem_instr_pc) + DATA_WIDTH'(4);
+            2'b11: ex_mem_forward_data = ex_mem_imm_out;
+            default: ex_mem_forward_data = '0;
+        endcase
+
+        forward_rs1_sel = 2'b00;
+        forward_rs2_sel = 2'b00;
+        forward_rd_old_sel = 2'b00;
+
+        if (id_ex_valid && ex_mem_valid && ex_mem_reg_write &&
+            !ex_mem_mem_read && (ex_mem_rd != 5'd0)) begin
+            if (ex_mem_rd == id_ex_rs1_addr)
+                forward_rs1_sel = 2'b10;
+            if (ex_mem_rd == id_ex_rs2_addr)
+                forward_rs2_sel = 2'b10;
+            if (ex_mem_rd == id_ex_rd)
+                forward_rd_old_sel = 2'b10;
+        end
+
+        if (id_ex_valid && mem_wb_valid && mem_wb_reg_write &&
+            (mem_wb_rd != 5'd0)) begin
+            if ((forward_rs1_sel == 2'b00) && (mem_wb_rd == id_ex_rs1_addr))
+                forward_rs1_sel = 2'b01;
+            if ((forward_rs2_sel == 2'b00) && (mem_wb_rd == id_ex_rs2_addr))
+                forward_rs2_sel = 2'b01;
+            if ((forward_rd_old_sel == 2'b00) && (mem_wb_rd == id_ex_rd))
+                forward_rd_old_sel = 2'b01;
+        end
+
+        case (forward_rs1_sel)
+            2'b10: execute_rs1_val = ex_mem_forward_data;
+            2'b01: execute_rs1_val = wb_data;
+            default: execute_rs1_val = id_ex_rs1_val;
+        endcase
+
+        case (forward_rs2_sel)
+            2'b10: execute_rs2_val = ex_mem_forward_data;
+            2'b01: execute_rs2_val = wb_data;
+            default: execute_rs2_val = id_ex_rs2_val;
+        endcase
+
+        case (forward_rd_old_sel)
+            2'b10: execute_rd_old_val = ex_mem_forward_data;
+            2'b01: execute_rd_old_val = wb_data;
+            default: execute_rd_old_val = id_ex_rd_old_val;
+        endcase
+    end
 
     // Format store data and byte enables for the addressed memory lanes.
     always_comb begin
@@ -299,6 +380,8 @@ module core #(
             // ID/EX reset
             id_ex_valid              <= 1'b0;
             id_ex_rd                 <= 5'b0;
+            id_ex_rs1_addr           <= 5'b0;
+            id_ex_rs2_addr           <= 5'b0;
             id_ex_rs1_val            <= '0;
             id_ex_rs2_val            <= '0;
             id_ex_rd_old_val         <= '0;
@@ -359,6 +442,8 @@ module core #(
                 id_ex_wb_sel <= cur_id_wb_sel;
                 id_ex_reg_write <= cur_id_reg_write;
                 id_ex_rd <= instr[11:7];
+                id_ex_rs1_addr <= instr[19:15];
+                id_ex_rs2_addr <= instr[24:20];
                 // imm value
                 id_ex_imm_out <= imm_out;
                 // fetch
@@ -388,8 +473,10 @@ module core #(
                 // A taken control-flow instruction invalidates only the
                 // younger instruction that would otherwise enter ID/EX.
                 // EX/MEM and MEM/WB continue advancing below.
-                if (jump_en) begin
+                if (jump_en || hazard_stall) begin
                     id_ex_rd                 <= 5'b0;
+                    id_ex_rs1_addr           <= 5'b0;
+                    id_ex_rs2_addr           <= 5'b0;
                     id_ex_rs1_val            <= '0;
                     id_ex_rs2_val            <= '0;
                     id_ex_rd_old_val         <= '0;
@@ -427,7 +514,7 @@ module core #(
                 ex_mem_mem_size <= id_ex_mem_size;
                 ex_mem_mem_unsigned <= id_ex_mem_unsigned;
                 ex_mem_illegal_instr <= id_ex_illegal_instr;
-                ex_mem_rs2_val <= id_ex_rs2_val;
+                ex_mem_rs2_val <= execute_rs2_val;
             end
 
             // MEMORY STAGE
@@ -454,7 +541,7 @@ module core #(
 
     // Pipeline controls and writeback mux.
     always_comb begin
-        fetch_enable = rst_n && !i_waitrequest && !pipeline_stall;
+        fetch_enable = rst_n && !i_waitrequest && !front_stall;
         memory_advance = rst_n && !pipeline_stall;
 
         // Control-flow redirects are resolved in execute.  The decoder only
@@ -484,7 +571,7 @@ module core #(
         // Do not allow the sequentially fetched instruction into ID/EX on
         // the same cycle that execute redirects fetch.
         decode_enable = rst_n && fetch_enable && instr_valid &&
-                        !pipeline_stall && !jump_en;
+                        !front_stall && !jump_en;
 
         load_byte = d_rdata[(mem_wb_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8) +: 8];
         load_half = d_rdata[(mem_wb_alu_result[$clog2(DATA_WIDTH / 8)-1:0] * 8) +: 16];

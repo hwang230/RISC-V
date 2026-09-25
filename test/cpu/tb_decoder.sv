@@ -18,6 +18,9 @@ module tb_decoder;
     logic branch;
     logic jump;
     logic jalr;
+    logic uses_rs1;
+    logic uses_rs2;
+    logic uses_rd_old;
     imm_src_e imm_type;
     logic [1:0] wb_sel;
     logic [1:0] mem_size;
@@ -44,6 +47,9 @@ module tb_decoder;
         .cur_id_branch(branch),
         .cur_id_jump(jump),
         .cur_id_jalr(jalr),
+        .cur_id_uses_rs1(uses_rs1),
+        .cur_id_uses_rs2(uses_rs2),
+        .cur_id_uses_rd_old(uses_rd_old),
         .cur_id_imm_type(imm_type),
         .cur_id_wb_sel(wb_sel),
         .cur_id_mem_size(mem_size),

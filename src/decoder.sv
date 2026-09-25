@@ -15,6 +15,9 @@ module decoder(
     output logic cur_id_branch,
     output logic cur_id_jump,
     output logic cur_id_jalr,
+    output logic cur_id_uses_rs1,
+    output logic cur_id_uses_rs2,
+    output logic cur_id_uses_rd_old,
     output imm_src_e cur_id_imm_type,
     output logic [1:0] cur_id_wb_sel,
     output logic [1:0] cur_id_mem_size,
@@ -34,6 +37,9 @@ module decoder(
         cur_id_branch          = 1'b0;
         cur_id_jump            = 1'b0;
         cur_id_jalr            = 1'b0;
+        cur_id_uses_rs1        = 1'b0;
+        cur_id_uses_rs2        = 1'b0;
+        cur_id_uses_rd_old     = 1'b0;
         cur_id_imm_type        = IMM_R;
         cur_id_wb_sel          = 2'b00;
         cur_id_mem_size        = 2'b10;
@@ -45,6 +51,8 @@ module decoder(
             // REGISTER OPERATION
             OP_ALU_R: begin
                 cur_id_reg_write = 1'b1;
+                cur_id_uses_rs1  = 1'b1;
+                cur_id_uses_rs2  = 1'b1;
                 // RV32M register-register operations use funct7=0000001.
                 if (cur_funct7 == 7'b0000001) begin
                     case (cur_funct3)
@@ -141,6 +149,7 @@ module decoder(
                 cur_id_reg_write   = 1'b1;
                 cur_id_alu_src_imm = 1'b1;
                 cur_id_imm_type    = IMM_I;
+                cur_id_uses_rs1    = 1'b1;
 
                 if (cur_funct3 == 3'b000) begin
                     cur_id_alu_op = ALU_ADD;
@@ -187,6 +196,7 @@ module decoder(
                 cur_id_alu_src_imm = 1'b1;
                 cur_id_mem_to_reg_write = 1'b1;
                 cur_id_wb_sel = 2'b01;
+                cur_id_uses_rs1 = 1'b1;
                 // load byte
                 if (cur_funct3 == '0) begin
                     cur_id_mem_size = 2'b00;
@@ -225,6 +235,8 @@ module decoder(
                 cur_id_mem_write = 1'b1;
                 cur_id_alu_src_imm = 1'b1;
                 cur_id_imm_type = IMM_S;
+                cur_id_uses_rs1 = 1'b1;
+                cur_id_uses_rs2 = 1'b1;
 
 
                 // store byte
@@ -253,6 +265,9 @@ module decoder(
                 cur_id_reg_write = 1'b1;
                 cur_id_imm_type = IMM_R;
                 cur_id_wb_sel = 2'b00;
+                cur_id_uses_rs1 = 1'b1;
+                cur_id_uses_rs2 = 1'b1;
+                cur_id_uses_rd_old = 1'b1;
             end 
 
 
@@ -260,6 +275,8 @@ module decoder(
             OP_BRANCH: begin
                 cur_id_imm_type = IMM_B;
                 cur_id_branch = 1'b1;
+                cur_id_uses_rs1 = 1'b1;
+                cur_id_uses_rs2 = 1'b1;
                 
                 if (cur_funct3 == 3'b0) begin
                     cur_id_alu_op = ALU_BEQ;
@@ -317,6 +334,7 @@ module decoder(
                     cur_id_imm_type    = IMM_I;
                     cur_id_alu_src_imm = 1'b1;
                     cur_id_wb_sel      = 2'b10;
+                    cur_id_uses_rs1    = 1'b1;
                 end
             end
 
@@ -339,6 +357,9 @@ module decoder(
             cur_id_branch           = 1'b0;
             cur_id_jump             = 1'b0;
             cur_id_jalr             = 1'b0;
+            cur_id_uses_rs1         = 1'b0;
+            cur_id_uses_rs2         = 1'b0;
+            cur_id_uses_rd_old      = 1'b0;
             cur_id_imm_type         = IMM_R;
             cur_id_wb_sel           = 2'b00;
             cur_id_mem_size         = 2'b10;

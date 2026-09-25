@@ -56,7 +56,10 @@ module fetch #(
     assign i_addr = pc;
     // Do not issue or consume an instruction while an older data access
     // stalls the in-order pipeline.
-    assign i_read = rst_n && !stall;
+    // Do not request another instruction while the current one is still
+    // waiting for decode. This turns instr/instr_valid into a one-entry
+    // fetch/decode buffer and prevents stalls from dropping instructions.
+    assign i_read = rst_n && !stall && !instr_valid;
     
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -68,30 +71,39 @@ module fetch #(
         end 
 
         else begin
-            instr_valid <= 1'b0;
+            // Hold a valid fetch/decode instruction while an older data
+            // access or a load-use hazard stalls the front of the pipeline.
+            if (!stall) begin
+                // A redirect has priority over the sequential response. The
+                // current instruction is younger than the instruction
+                // resolving the redirect, so invalidate it and restart from
+                // the target.
+                if (jump_en) begin
+                    pc <= jump_target;
+                    instr_valid <= 1'b0;
+                    discard_response <= i_waitrequest;
+                end
 
-            // A redirect has priority over the sequential response. The
-            // current instruction is younger than the instruction resolving
-            // the redirect, so invalidate it and restart from the target.
-            if (!stall && jump_en) begin
-                pc <= jump_target;
-                instr_valid <= 1'b0;
-                discard_response <= i_waitrequest;
-            end
+                // Decode consumes the held instruction on this edge.  The
+                // next request can be issued after the valid bit clears.
+                else if (instr_valid) begin
+                    instr_valid <= 1'b0;
+                end
 
-            // L1I holds i_waitrequest high until its instruction response is
-            // ready. The request address stays stable because PC advances
-            // only when that response is consumed.
-            else if (!stall && !i_waitrequest) begin
-                if (discard_response) begin
-                    // Retire the outstanding sequential response without
-                    // exposing it to decode. PC already points at target.
-                    discard_response <= 1'b0;
-                end else begin
-                    instr <= fetched_instr;
-                    instr_pc <= pc;
-                    instr_valid <= 1'b1;
-                    pc <= pc + ADDR_WIDTH'(4);
+                // L1I holds i_waitrequest high until its instruction response
+                // is ready. The request address stays stable because PC
+                // advances only when that response is consumed.
+                else if (!i_waitrequest) begin
+                    if (discard_response) begin
+                        // Retire the outstanding sequential response without
+                        // exposing it to decode. PC already points at target.
+                        discard_response <= 1'b0;
+                    end else begin
+                        instr <= fetched_instr;
+                        instr_pc <= pc;
+                        instr_valid <= 1'b1;
+                        pc <= pc + ADDR_WIDTH'(4);
+                    end
                 end
             end
         end
