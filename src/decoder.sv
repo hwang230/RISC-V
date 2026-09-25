@@ -324,5 +324,26 @@ module decoder(
 
         endcase
 
+        // Unsupported encodings must not produce architectural side effects.
+        // Keep the illegal flag asserted for future exception/trap handling,
+        // but turn the instruction into a harmless pipeline operation for
+        // now.
+        if (cur_id_illegal_instr) begin
+            cur_id_alu_op           = ALU_ADD;
+            cur_id_mem_read         = 1'b0;
+            cur_id_mem_write        = 1'b0;
+            cur_id_reg_write        = 1'b0;
+            cur_id_mem_to_reg_write = 1'b0;
+            cur_id_alu_src_imm      = 1'b0;
+            cur_id_alu_src_pc       = 1'b0;
+            cur_id_branch           = 1'b0;
+            cur_id_jump             = 1'b0;
+            cur_id_jalr             = 1'b0;
+            cur_id_imm_type         = IMM_R;
+            cur_id_wb_sel           = 2'b00;
+            cur_id_mem_size         = 2'b10;
+            cur_id_mem_unsigned     = 1'b0;
+        end
+
     end
 endmodule
