@@ -32,6 +32,9 @@ module fetch #(
     logic [ADDR_WIDTH-1:0] pc;
     logic [31:0] fetched_instr;
     logic [INSTR_LANE_BITS-1:0] instr_lane;
+    // A redirect can occur while the instruction cache is still returning
+    // the sequential fetch. That response belongs to the flushed path.
+    logic discard_response;
 
     initial begin
         if (ADDR_WIDTH < 32)
@@ -61,20 +64,35 @@ module fetch #(
             instr <= '0;
             instr_valid <= 1'b0;
             instr_pc <= '0;
+            discard_response <= 1'b0;
         end 
 
         else begin
             instr_valid <= 1'b0;
 
+            // A redirect has priority over the sequential response. The
+            // current instruction is younger than the instruction resolving
+            // the redirect, so invalidate it and restart from the target.
+            if (!stall && jump_en) begin
+                pc <= jump_target;
+                instr_valid <= 1'b0;
+                discard_response <= i_waitrequest;
+            end
+
             // L1I holds i_waitrequest high until its instruction response is
             // ready. The request address stays stable because PC advances
             // only when that response is consumed.
-            if (!stall && !i_waitrequest) begin
-                instr <= fetched_instr;
-                instr_pc <= pc;
-                // should stay in fetch stage until this is true
-                instr_valid <= 1'b1;
-                pc <= jump_en ? jump_target : pc + ADDR_WIDTH'(4);
+            else if (!stall && !i_waitrequest) begin
+                if (discard_response) begin
+                    // Retire the outstanding sequential response without
+                    // exposing it to decode. PC already points at target.
+                    discard_response <= 1'b0;
+                end else begin
+                    instr <= fetched_instr;
+                    instr_pc <= pc;
+                    instr_valid <= 1'b1;
+                    pc <= pc + ADDR_WIDTH'(4);
+                end
             end
         end
 

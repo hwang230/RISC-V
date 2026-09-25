@@ -110,15 +110,20 @@ module tb_fetch #(
         end
 
         // Redirect to an upper lane at a high address when ADDR_WIDTH allows
-        // it. A response for the current request consumes the redirect, and
-        // the following request must use the full-width target address.
+        // it. The sequential response is flushed; the following request must
+        // use the full-width target address.
         jump_target = '0;
         for (integer bit_index = 32; bit_index < ADDR_WIDTH; bit_index = bit_index + 1)
             jump_target[bit_index] = (bit_index == 32);
         jump_target[7:0] = 8'(8'h80 + ((LANES - 1) * 4));
         jump_en = 1'b1;
         expected_instruction = 32'h0000_006f;
-        check_response(expected_pc, expected_instruction, jump_target);
+        i_data = response_for_pc(expected_pc, expected_instruction);
+        i_waitrequest = 1'b0;
+        tick();
+        if (!i_read || instr_valid || i_addr !== jump_target)
+            $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: redirect did not flush sequential response",
+                   ADDR_WIDTH, DATA_WIDTH);
 
         jump_en = 1'b0;
         i_waitrequest = 1'b1;
