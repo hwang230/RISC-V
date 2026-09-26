@@ -13,9 +13,9 @@ module memory_system #(
     parameter integer NUM_WAYS = 4,
     parameter integer L1_CACHE_SIZE = 64 * 1024,
     parameter integer L2_CACHE_SIZE = 256 * 1024,
-    parameter integer L1_LATENCY = 5,
-    parameter integer L2_LATENCY = 20,
-    parameter integer DRAM_LATENCY = 100,
+    parameter integer L1_LATENCY = 1,
+    parameter integer L2_LATENCY = 5,
+    parameter integer DRAM_LATENCY = 80,
     parameter integer DRAM_SIZE = 1024 * 1024
 )(
     input  logic                  clk,

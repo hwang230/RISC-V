@@ -7,7 +7,7 @@ module l2_cache #(
     parameter NUM_WAYS   = 4,
     parameter ADDR_WIDTH = 32, 
     parameter DATA_WIDTH = 32, 
-    parameter LATENCY = 20
+    parameter LATENCY = 5
 )(
     input logic clk, 
     input logic rst_n, 
@@ -106,6 +106,16 @@ module l2_cache #(
     logic [DATA_WIDTH-1:0] writedata;
     logic [DATA_WIDTH-1:0] readdata;
 
+    // L1 refills and dirty writebacks arrive as sequential single-beat
+    // requests.  These markers model the first request as a normal cache/
+    // memory access and the remaining beats as a streamed line transfer.
+    logic                  read_stream_valid;
+    logic [ADDR_WIDTH-1:0] read_stream_addr;
+    logic                  read_stream_beat;
+    logic                  write_stream_valid;
+    logic [ADDR_WIDTH-1:0] write_stream_addr;
+    logic                  write_stream_beat;
+
     logic [1:0] resp;
 
 
@@ -185,6 +195,12 @@ module l2_cache #(
             ar_sent   <= 1'b0;
             aw_sent   <= 1'b0;
             w_sent    <= 1'b0;
+            read_stream_valid <= 1'b0;
+            read_stream_addr <= '0;
+            read_stream_beat <= 1'b0;
+            write_stream_valid <= 1'b0;
+            write_stream_addr <= '0;
+            write_stream_beat <= 1'b0;
             miss_way_selected <= 1'b0;
             miss_way          <= '0;
             refill_count      <= '0;
@@ -211,23 +227,40 @@ module l2_cache #(
 
                     if ((aw_received || (axi_slave_d.awvalid && axi_slave_d.awready)) &&
                     (w_received || (axi_slave_d.wvalid && axi_slave_d.wready))) begin
+                        write_stream_beat <= write_stream_valid &&
+                            ((((aw_received) ? writeaddr : axi_slave_d.awaddr) &
+                              ~ADDR_WIDTH'(LINE_SIZE - 1)) ==
+                             (write_stream_addr & ~ADDR_WIDTH'(LINE_SIZE - 1))) &&
+                            ((aw_received ? writeaddr : axi_slave_d.awaddr) ==
+                             write_stream_addr + DATA_WIDTH/8);
+                        read_stream_valid <= 1'b0;
                         state <= WRITE_WAIT; 
                         owner <= OWNER_D;
                     end else if (axi_slave_d.arvalid && axi_slave_d.arready) begin
                         // L1D read operation
                         readaddr <= axi_slave_d.araddr;
+                        read_stream_beat <= read_stream_valid &&
+                            ((axi_slave_d.araddr & ~ADDR_WIDTH'(LINE_SIZE - 1)) ==
+                             (read_stream_addr & ~ADDR_WIDTH'(LINE_SIZE - 1))) &&
+                            (axi_slave_d.araddr == read_stream_addr + DATA_WIDTH/8);
+                        write_stream_valid <= 1'b0;
                         state <= READ_WAIT;
                         owner <= OWNER_D;
                     end else if (axi_slave_i.arvalid && axi_slave_i.arready) begin
                         // L1I read operation
                         readaddr <= axi_slave_i.araddr;
+                        read_stream_beat <= read_stream_valid &&
+                            ((axi_slave_i.araddr & ~ADDR_WIDTH'(LINE_SIZE - 1)) ==
+                             (read_stream_addr & ~ADDR_WIDTH'(LINE_SIZE - 1))) &&
+                            (axi_slave_i.araddr == read_stream_addr + DATA_WIDTH/8);
+                        write_stream_valid <= 1'b0;
                         state <= READ_WAIT;
                         owner <= OWNER_I;
                     end
                 end
 
                 READ_WAIT: begin
-                    if (latency_count == LATENCY - 1) begin
+                    if (read_stream_beat || latency_count == LATENCY - 1) begin
                         latency_count <= '0;
                         if (hit) begin
                             state <= READ_RESP;
@@ -303,6 +336,8 @@ module l2_cache #(
                 READ_RESP: begin
                     if (owner == OWNER_D) begin
                         if (axi_slave_d.rvalid && axi_slave_d.rready) begin
+                            read_stream_addr <= readaddr;
+                            read_stream_valid <= 1'b1;
                             readaddr <= '0;
                             readdata <= '0;
                             state <= IDLE;
@@ -311,6 +346,8 @@ module l2_cache #(
                         end
                     end else if (owner == OWNER_I) begin
                         if (axi_slave_i.rvalid && axi_slave_i.rready) begin
+                            read_stream_addr <= readaddr;
+                            read_stream_valid <= 1'b1;
                             readaddr <= '0;
                             readdata <= '0;
                             state <= IDLE;
@@ -322,7 +359,7 @@ module l2_cache #(
                 end
 
                 WRITE_WAIT: begin
-                    if (latency_count == LATENCY - 1) begin
+                    if (write_stream_beat || latency_count == LATENCY - 1) begin
                         latency_count <= '0;
 
                         if (hit) begin
@@ -410,6 +447,8 @@ module l2_cache #(
                     end
                     // DRAM write completed
                     if (axi_master.bvalid && axi_master.bready) begin
+                        write_stream_addr <= writeaddr;
+                        write_stream_valid <= 1'b1;
                         resp <= axi_master.bresp;
                         aw_sent <= 1'b0;
                         w_sent  <= 1'b0;

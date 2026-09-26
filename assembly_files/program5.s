@@ -1,4 +1,5 @@
 main:
+    lui x20, 0x80            # shared-memory data region
     addi x1,  x0, 3
     addi x2,  x1, 4
     add  x3,  x2, x1
@@ -7,8 +8,8 @@ main:
     or   x6,  x5, x2
     xor  x7,  x6, x1
 
-    sw   x7,  0(x0)
-    lw   x8,  0(x0)
+    sw   x7,  0(x20)
+    lw   x8,  0(x20)
     add  x9,  x8, x7
 
     beq  x9,  x0, done

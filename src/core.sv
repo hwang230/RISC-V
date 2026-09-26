@@ -1,6 +1,8 @@
 `include "cpu_pkg.sv"
 `include "./alu/alu.sv"
+`ifndef CORE_STANDALONE
 `include "./memory/memory_system.sv"
+`endif
 `include "decoder.sv"
 `include "fetch.sv"
 `include "regfile.sv"
@@ -10,7 +12,13 @@ import cpu_pkg::*;
 
 module core #(
     parameter int DATA_WIDTH = 32,
-    parameter int ADDR_WIDTH = 32
+    parameter int ADDR_WIDTH = 32,
+    parameter int L1_CACHE_SIZE = 64 * 1024,
+    parameter int L2_CACHE_SIZE = 256 * 1024,
+    parameter int L1_LATENCY = 1,
+    parameter int L2_LATENCY = 5,
+    parameter int DRAM_LATENCY = 80,
+    parameter int DRAM_SIZE = 1024 * 1024
 )(
     input logic clk,
     input logic rst_n
@@ -182,7 +190,14 @@ module core #(
     logic [DATA_WIDTH-1:0] d_rdata;
     logic                  d_waitrequest;
 
-    memory_system u_memory_system (
+    memory_system #(
+        .L1_CACHE_SIZE(L1_CACHE_SIZE),
+        .L2_CACHE_SIZE(L2_CACHE_SIZE),
+        .L1_LATENCY(L1_LATENCY),
+        .L2_LATENCY(L2_LATENCY),
+        .DRAM_LATENCY(DRAM_LATENCY),
+        .DRAM_SIZE(DRAM_SIZE)
+    ) u_memory_system (
         .clk(clk),
         .rst_n(rst_n),
         .i_read(i_read),
@@ -450,9 +465,14 @@ module core #(
                 id_ex_rs2_addr <= instr[24:20];
                 id_ex_imm_out <= imm_out;
                 id_ex_instr_pc <= instr_pc;
-                id_ex_rs1_val <= rs1_val;
-                id_ex_rs2_val <= rs2_val;
-                id_ex_rd_old_val <= rd_old_val;
+                // Decode and register writeback sample the same edge. Bypass
+                // WB here so ID/EX does not capture the pre-write register value.
+                id_ex_rs1_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
+                                 mem_wb_rd == instr[19:15]) ? wb_data : rs1_val;
+                id_ex_rs2_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
+                                 mem_wb_rd == instr[24:20]) ? wb_data : rs2_val;
+                id_ex_rd_old_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
+                                    mem_wb_rd == instr[11:7]) ? wb_data : rd_old_val;
                 id_ex_alu_op <= cur_id_alu_op;
                 id_ex_alu_src_imm <= cur_id_alu_src_imm;
                 id_ex_alu_src_pc <= cur_id_alu_src_pc;
@@ -577,9 +597,9 @@ module core #(
     // Load formatting and writeback selection
     // ------------------------------------------------------------------------
     always_comb begin
-        load_byte = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 8];
-        load_half = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 16];
-        load_word = d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 32];
+        load_byte = mem_wb_d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 8];
+        load_half = mem_wb_d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 16];
+        load_word = mem_wb_d_rdata[(mem_wb_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 32];
         load_data_formatted = '0;
 
         case (mem_wb_mem_size)
@@ -623,10 +643,6 @@ module core #(
 
             WB_IMM: begin
                 wb_data = mem_wb_imm_out;
-            end
-
-            default: begin
-                wb_data = '0;
             end
         endcase
     end

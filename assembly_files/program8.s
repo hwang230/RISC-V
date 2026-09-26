@@ -10,13 +10,13 @@
 # - x1 = 45
 # - x2 = 6
 # - x3 = 6
-# - mem[0] = 40
-# - mem[1] = 45
+# - mem[0x80000] = 40 (byte address)
+# - mem[0x80004] = 45 (byte address)
 
     addi x1, x0, 0      # running result
     addi x2, x0, 1      # loop counter i
     addi x3, x0, 6      # loop limit
-    addi x4, x0, 0      # base address for data memory
+    lui  x4, 0x80       # data at 0x80000, separate from code
 
 loop:
     add  x1, x1, x2     # RAW hazard on x1

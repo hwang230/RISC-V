@@ -7,7 +7,7 @@ module DRAM #(
     parameter LINE_SIZE  = 64,
     parameter DATA_WIDTH = 32,
     parameter ADDR_WIDTH = 32,
-    parameter LATENCY = 100
+    parameter LATENCY = 80
 )(
     input logic clk, 
     input logic rst_n, 
@@ -51,6 +51,17 @@ module DRAM #(
     logic [ADDR_WIDTH-1:0] readaddr; 
     logic [DATA_WIDTH-1:0] readdata;
 
+    // The cache presents a line as a sequence of single-beat AXI-Lite
+    // transactions.  Remember the last completed beat so a sequential beat
+    // in the same line can use the DRAM burst/streaming cost instead of
+    // paying the row-access latency again.
+    logic                  read_stream_valid;
+    logic [ADDR_WIDTH-1:0] read_stream_addr;
+    logic                  write_stream_valid;
+    logic [ADDR_WIDTH-1:0] write_stream_addr;
+    logic                  read_stream_beat;
+    logic                  write_stream_beat;
+
     assign read_word_index = readaddr[BYTE_OFFSET_BITS +: MEM_INDEX_WIDTH];
     assign write_word_index = writeaddr[BYTE_OFFSET_BITS +: MEM_INDEX_WIDTH];
 
@@ -74,6 +85,12 @@ module DRAM #(
             readaddr <= '0;
             readdata <= '0;
             latency_count <= '0;
+            read_stream_valid <= 1'b0;
+            read_stream_addr <= '0;
+            write_stream_valid <= 1'b0;
+            write_stream_addr <= '0;
+            read_stream_beat <= 1'b0;
+            write_stream_beat <= 1'b0;
         end else begin
             case (state)
                 IDLE: begin
@@ -92,19 +109,33 @@ module DRAM #(
                     if ((aw_received || (axi.awvalid && axi.awready)) && 
                     (w_received  || (axi.wvalid  && axi.wready))) begin
                         // received both aw and w
+                        write_stream_beat <= write_stream_valid &&
+                            ((((aw_received) ? writeaddr : axi.awaddr) &
+                              ~ADDR_WIDTH'(LINE_SIZE - 1)) ==
+                             (write_stream_addr & ~ADDR_WIDTH'(LINE_SIZE - 1))) &&
+                            ((aw_received ? writeaddr : axi.awaddr) ==
+                             write_stream_addr + DATA_WIDTH/8);
+                        read_stream_valid <= 1'b0;
                         state <= WRITE_WAIT;
                     end else if (axi.arvalid && axi.arready) begin
                         // handshake for read
                         readaddr <= axi.araddr;
+                        read_stream_beat <= read_stream_valid &&
+                            ((axi.araddr & ~ADDR_WIDTH'(LINE_SIZE - 1)) ==
+                             (read_stream_addr & ~ADDR_WIDTH'(LINE_SIZE - 1))) &&
+                            (axi.araddr == read_stream_addr + DATA_WIDTH/8);
+                        write_stream_valid <= 1'b0;
                         state <= READ_WAIT;
                     end
                 end
 
                 WRITE_WAIT: begin
-                    if (latency_count == LATENCY - 1) begin
+                    if (write_stream_beat || latency_count == LATENCY - 1) begin
                         if ((writeaddr >> BYTE_OFFSET_BITS) < ADDR_WIDTH'(NUM_WORDS))
                             memory[write_word_index] <= writedata;
                         latency_count <= '0;
+                        write_stream_addr <= writeaddr;
+                        write_stream_valid <= 1'b1;
                         state <= WRITE_RESP;
                     end else begin
                         latency_count <= latency_count + 1'b1;
@@ -113,12 +144,14 @@ module DRAM #(
 
                 READ_WAIT: begin
                     // stay in this state until the latency is reached
-                    if (latency_count == LATENCY - 1) begin
+                    if (read_stream_beat || latency_count == LATENCY - 1) begin
                         if ((readaddr >> BYTE_OFFSET_BITS) < ADDR_WIDTH'(NUM_WORDS))
                             readdata <= memory[read_word_index];
                         else
                             readdata <= '0;
                         latency_count <= '0;
+                        read_stream_addr <= readaddr;
+                        read_stream_valid <= 1'b1;
                         state         <= READ_RESP;
                     end else begin
                         latency_count <= latency_count + 1'b1;

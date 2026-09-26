@@ -7,7 +7,7 @@
         parameter NUM_WAYS   = 4,
         parameter ADDR_WIDTH = 32,
         parameter DATA_WIDTH = 32,
-        parameter LATENCY = 5
+        parameter LATENCY = 1
     )(
         input logic clk, 
         input logic rst_n,

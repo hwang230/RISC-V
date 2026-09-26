@@ -1,5 +1,5 @@
 main:
-    addi x2,  x0, 64         # base address in data memory
+    lui  x2,  0x80          # data at 0x80000, separate from code
     addi x3,  x0, 7
     addi x4,  x0, 12
     addi x5,  x0, 1
@@ -14,8 +14,8 @@ main:
     sll  x11, x5, x3         # x11 = 1 << 7 = 128
 
     addi x17, x0, -8
-    sw   x15, 0(x2)          # MEM[64] = 19
-    sw   x16, 4(x2)          # MEM[68] = 4
+    sw   x15, 0(x2)          # MEM[0x80000] = 19
+    sw   x16, 4(x2)          # MEM[0x80004] = 4
     addi x0,  x0, 0          # nop
 
     srl  x12, x11, x5        # x12 = 64
