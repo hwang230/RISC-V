@@ -228,10 +228,11 @@ module tb_core_directed;
         clear_pipeline();
         injected_valid=1; injected_instr=32'h00100093;
         dut.u_memory_system.manual_i_wait=1;
-        #1; check(!dut.fetch_enable && !dut.decode_enable,"instruction wait blocks decode");
+        // A queued instruction may decode while a younger fetch request waits.
+        #1; check(dut.fetch_enable && dut.decode_enable,"instruction wait does not block queued decode");
         tick();
         dut.u_memory_system.manual_i_wait=0;
-        #1; check(dut.decode_enable,"instruction wait releases decode");
+        #1; check(dut.decode_enable,"queued decode remains enabled");
         clear_pipeline();
         $display("PASS: tb_core_directed (%0d checks)",checks);
         $finish;

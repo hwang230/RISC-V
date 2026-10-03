@@ -45,6 +45,9 @@ module core #(
     // ------------------------------------------------------------------------
     logic                  jump_en;
     logic [ADDR_WIDTH-1:0] jump_target;
+    logic                  branch_update_valid;
+    logic [ADDR_WIDTH-1:0] branch_update_pc;
+    logic                  branch_update_taken;
     logic                  i_read;
     logic [ADDR_WIDTH-1:0] i_addr;
     logic [DATA_WIDTH-1:0] i_data;
@@ -52,6 +55,7 @@ module core #(
     logic [DATA_WIDTH-1:0] instr;
     logic                  instr_valid;
     logic [ADDR_WIDTH-1:0] instr_pc;
+    logic                  instr_pred_taken;
     logic                  pipeline_stall;
     logic                  hazard_stall;
     logic                  front_stall;
@@ -62,13 +66,18 @@ module core #(
         .stall(front_stall),
         .jump_en(jump_en),
         .jump_target(jump_target),
+        .branch_update_valid(branch_update_valid),
+        .branch_update_pc(branch_update_pc),
+        .branch_update_taken(branch_update_taken),
+        .consume(decode_enable),
         .i_read(i_read),
         .i_addr(i_addr),
         .i_data(i_data),
         .i_waitrequest(i_waitrequest),
         .instr(instr),
         .instr_valid(instr_valid),
-        .instr_pc(instr_pc)
+        .instr_pc(instr_pc),
+        .instr_pred_taken(instr_pred_taken)
     );
 
     // ------------------------------------------------------------------------
@@ -231,6 +240,7 @@ module core #(
     logic                  id_ex_alu_src_imm;
     logic                  id_ex_alu_src_pc;
     logic                  id_ex_branch;
+    logic                  id_ex_pred_taken;
     logic                  id_ex_jump;
     logic                  id_ex_jalr;
     logic                  id_ex_mem_read;
@@ -302,6 +312,11 @@ module core #(
     assign d_addr  = ex_mem_alu_result;
     assign pipeline_stall = rst_n && d_waitrequest;
     assign front_stall = pipeline_stall || hazard_stall;
+
+    assign branch_update_valid = memory_advance && id_ex_valid &&
+                                 id_ex_branch && !id_ex_illegal_instr;
+    assign branch_update_pc = id_ex_instr_pc;
+    assign branch_update_taken = alu_result[0];
 
     // A load result is not available until MEM/WB. All other register-writing
     // results can be forwarded from EX/MEM; MEM/WB supplies the final value
@@ -412,6 +427,7 @@ module core #(
             id_ex_alu_src_imm        <= 1'b0;
             id_ex_alu_src_pc         <= 1'b0;
             id_ex_branch             <= 1'b0;
+            id_ex_pred_taken         <= 1'b0;
             id_ex_jump               <= 1'b0;
             id_ex_jalr               <= 1'b0;
             id_ex_mem_read           <= 1'b0;
@@ -477,6 +493,7 @@ module core #(
                 id_ex_alu_src_imm <= cur_id_alu_src_imm;
                 id_ex_alu_src_pc <= cur_id_alu_src_pc;
                 id_ex_branch <= cur_id_branch;
+                id_ex_pred_taken <= instr_pred_taken;
                 id_ex_jump <= cur_id_jump;
                 id_ex_jalr <= cur_id_jalr;
                 id_ex_mem_to_reg_write <= cur_id_mem_to_reg_write;
@@ -504,6 +521,7 @@ module core #(
                     id_ex_alu_src_imm        <= 1'b0;
                     id_ex_alu_src_pc         <= 1'b0;
                     id_ex_branch             <= 1'b0;
+                    id_ex_pred_taken         <= 1'b0;
                     id_ex_jump               <= 1'b0;
                     id_ex_jalr               <= 1'b0;
                     id_ex_mem_read           <= 1'b0;
@@ -561,12 +579,14 @@ module core #(
     // Control-flow resolution
     // ------------------------------------------------------------------------
     always_comb begin
-        fetch_enable = rst_n && !i_waitrequest && !front_stall;
+        // A queued instruction can decode while a younger fetch request is
+        // still waiting on the instruction cache.
+        fetch_enable = rst_n && !front_stall;
         memory_advance = rst_n && !pipeline_stall;
 
-        // Control-flow redirects are resolved in execute.  The decoder only
-        // identifies a branch or jump; the ALU supplies the branch condition
-        // and the effective address for JALR.
+        // Direct conditional branches use the prediction already applied in
+        // fetch. Execute redirects only when the prediction was wrong.
+        // JAL/JALR remain unconditional execute-time redirects.
         jump_en = 1'b0;
         jump_target = '0;
 
@@ -582,10 +602,15 @@ module core #(
                 jump_target = ADDR_WIDTH'(id_ex_instr_pc) +
                               ADDR_WIDTH'(id_ex_imm_out);
             end
-        end else if (id_ex_valid && id_ex_branch && alu_result[0]) begin
+        end else if (id_ex_valid && id_ex_branch && !id_ex_illegal_instr &&
+                     (id_ex_pred_taken != alu_result[0])) begin
             jump_en = 1'b1;
-            jump_target = ADDR_WIDTH'(id_ex_instr_pc) +
-                          ADDR_WIDTH'(id_ex_imm_out);
+            if (alu_result[0]) begin
+                jump_target = ADDR_WIDTH'(id_ex_instr_pc) +
+                              ADDR_WIDTH'(id_ex_imm_out);
+            end else begin
+                jump_target = ADDR_WIDTH'(id_ex_instr_pc) + ADDR_WIDTH'(4);
+            end
         end
 
         // Do not allow the sequentially fetched instruction into ID/EX on

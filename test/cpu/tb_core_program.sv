@@ -29,6 +29,7 @@ module tb_core_program #(
     int trace_count, store_count, stop_pc, retired=0, stores=0;
     int cycles=0, max_cycles=2000000, i_stalls=0, d_stalls=0;
     int hazards=0, redirects=0, wb_during_wait=0;
+    int branch_predictions=0, branch_taken=0, branch_mispredictions=0;
     real ipc;
 
     function automatic logic [31:0] memory_word(input int word_index);
@@ -91,6 +92,17 @@ module tb_core_program #(
             if (dut.d_waitrequest) d_stalls++;
             if (dut.hazard_stall) hazards++;
             if (dut.jump_en && !dut.pipeline_stall) redirects++;
+            // Count a branch when it advances out of EX so a held instruction
+            // during a data-side wait is not counted more than once.
+            if (dut.memory_advance && dut.id_ex_valid && dut.id_ex_branch &&
+                !dut.id_ex_illegal_instr) begin
+                branch_predictions++;
+                if (dut.alu_result[0]) begin
+                    branch_taken++;
+                end
+                if (dut.id_ex_pred_taken != dut.alu_result[0])
+                    branch_mispredictions++;
+            end
             if (dut.mem_wb_valid && dut.d_waitrequest) wb_during_wait++;
             if (dut.d_read && dut.d_write) $fatal(1,"simultaneous data read/write");
             if (dut.d_write && !dut.d_waitrequest) begin
@@ -115,7 +127,7 @@ module tb_core_program #(
                         if (dirty_word[w] && memory_word(w) !== architectural_memory[w])
                             $fatal(1,"final memory mismatch at %08x",w*4);
                     ipc = (cycles == 0) ? 0.0 : $itor(retired) / $itor(cycles);
-                    $display("PASS: tb_core_program retired=%0d stores=%0d cycles=%0d IPC=%0.4f I-wait=%0d D-wait=%0d hazards=%0d redirects=%0d WB-during-wait=%0d",retired,stores,cycles,ipc,i_stalls,d_stalls,hazards,redirects,wb_during_wait);
+                    $display("PASS: tb_core_program retired=%0d stores=%0d cycles=%0d IPC=%0.4f I-wait=%0d D-wait=%0d hazards=%0d branches=%0d branch-taken=%0d branch-predictions=%0d branch-mispredictions=%0d redirects=%0d WB-during-wait=%0d",retired,stores,cycles,ipc,i_stalls,d_stalls,hazards,branch_predictions,branch_taken,branch_predictions,branch_mispredictions,redirects,wb_during_wait);
                     $finish;
                 end else begin
                     dest=(dut.mem_wb_reg_write && dut.mem_wb_rd!=0) ? int'(dut.mem_wb_rd) : 32;

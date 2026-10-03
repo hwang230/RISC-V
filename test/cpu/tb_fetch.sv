@@ -7,11 +7,16 @@ module tb_fetch #(
 
     localparam integer LANES = DATA_WIDTH / 32;
     localparam integer BUS_BYTES = DATA_WIDTH / 8;
+    localparam logic [31:0] TEST_BRANCH = 32'h0000_0463; // beq x0,x0,+8
 
     logic clk, rst_n;
     logic stall;
     logic jump_en;
     logic [ADDR_WIDTH-1:0] jump_target;
+    logic branch_update_valid;
+    logic [ADDR_WIDTH-1:0] branch_update_pc;
+    logic branch_update_taken;
+    logic consume;
     logic i_read;
     logic [ADDR_WIDTH-1:0] i_addr;
     logic [DATA_WIDTH-1:0] i_data;
@@ -19,6 +24,7 @@ module tb_fetch #(
     logic [31:0] instr;
     logic instr_valid;
     logic [ADDR_WIDTH-1:0] instr_pc;
+    logic instr_pred_taken;
     logic [ADDR_WIDTH-1:0] expected_pc;
     logic [31:0] expected_instruction;
 
@@ -65,11 +71,62 @@ module tb_fetch #(
             i_data = response_for_pc(response_pc, selected_instruction);
             i_waitrequest = 1'b0;
             tick();
-            if (i_read || instr !== selected_instruction || !instr_valid ||
+            if (instr !== selected_instruction || !instr_valid ||
                 instr_pc !== response_pc || i_addr !== next_pc)
                 $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: response at %h got instr=%h valid=%b instr_pc=%h next_addr=%h expected instr=%h instr_pc=%h next_addr=%h",
                        ADDR_WIDTH, DATA_WIDTH, response_pc, instr, instr_valid,
                        instr_pc, i_addr, selected_instruction, response_pc, next_pc);
+
+            // Model decode consuming the queue head, then hold the next
+            // request until the following response check.
+            consume = 1'b1;
+            i_waitrequest = 1'b1;
+            tick();
+            consume = 1'b0;
+            if (!i_read || instr_valid)
+                $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: queue head did not drain valid=%b addr=%h",
+                       ADDR_WIDTH, DATA_WIDTH, instr_valid, i_addr);
+        end
+    endtask
+
+    task automatic check_branch_response(
+        input logic expected_prediction,
+        input logic [ADDR_WIDTH-1:0] expected_next_pc
+    );
+        begin
+            i_data = response_for_pc('0, TEST_BRANCH);
+            i_waitrequest = 1'b0;
+            tick();
+            if (instr !== TEST_BRANCH || !instr_valid ||
+                instr_pc !== '0 || instr_pred_taken !== expected_prediction ||
+                i_addr !== expected_next_pc)
+                $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: prediction=%b instr=%h valid=%b instr_pc=%h next_addr=%h expected prediction=%b next_addr=%h",
+                       ADDR_WIDTH, DATA_WIDTH, instr_pred_taken, instr, instr_valid,
+                       instr_pc, i_addr, expected_prediction, expected_next_pc);
+            i_waitrequest = 1'b1;
+        end
+    endtask
+
+    task automatic resolve_test_branch(input logic actual_taken);
+        begin
+            // Use the existing redirect input to restart the same test branch
+            // after applying one execute-stage outcome update.
+            branch_update_valid = 1'b1;
+            branch_update_pc = '0;
+            branch_update_taken = actual_taken;
+            jump_target = '0;
+            jump_en = 1'b1;
+            i_waitrequest = 1'b0;
+            tick();
+
+            branch_update_valid = 1'b0;
+            branch_update_taken = 1'b0;
+            jump_en = 1'b0;
+            i_waitrequest = 1'b1;
+            tick();
+            if (!i_read || instr_valid || i_addr !== '0)
+                $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: predictor test restart failed addr=%h valid=%b",
+                       ADDR_WIDTH, DATA_WIDTH, i_addr, instr_valid);
         end
     endtask
 
@@ -80,6 +137,10 @@ module tb_fetch #(
         stall = 1'b0;
         jump_en = 1'b0;
         jump_target = '0;
+        branch_update_valid = 1'b0;
+        branch_update_pc = '0;
+        branch_update_taken = 1'b0;
+        consume = 1'b0;
         i_data = '0;
         i_waitrequest = 1'b1;
         expected_pc = '0;
@@ -93,6 +154,35 @@ module tb_fetch #(
         tick();
         if (!i_read || i_addr !== expected_pc || instr_valid)
             $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: request/address not held under waitrequest", ADDR_WIDTH, DATA_WIDTH);
+
+        // Exercise the complete two-bit state machine. Reset initializes the
+        // entry to strongly not-taken (00), and prediction uses the state MSB.
+        check_branch_response(1'b0, ADDR_WIDTH'(4));
+        resolve_test_branch(1'b1); // 00 -> 01, still predicts not taken
+        check_branch_response(1'b0, ADDR_WIDTH'(4));
+        resolve_test_branch(1'b1); // 01 -> 10, now predicts taken
+        check_branch_response(1'b1, ADDR_WIDTH'(8));
+        resolve_test_branch(1'b1); // 10 -> 11, remains taken
+        check_branch_response(1'b1, ADDR_WIDTH'(8));
+        resolve_test_branch(1'b0); // 11 -> 10, remains taken
+        check_branch_response(1'b1, ADDR_WIDTH'(8));
+        resolve_test_branch(1'b0); // 10 -> 01, now predicts not taken
+        check_branch_response(1'b0, ADDR_WIDTH'(4));
+        resolve_test_branch(1'b0); // 01 -> 00, remains not taken
+        check_branch_response(1'b0, ADDR_WIDTH'(4));
+
+        // Reset clears both the fetch buffer and predictor state before the
+        // existing width/lane and redirect checks.
+        rst_n = 1'b0;
+        i_waitrequest = 1'b1;
+        tick();
+        if (i_read || i_addr !== '0 || instr !== 32'd0 || instr_pc !== '0 || instr_valid)
+            $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: predictor reset failed", ADDR_WIDTH, DATA_WIDTH);
+        rst_n = 1'b1;
+        tick();
+        tick();
+        if (!i_read || i_addr !== '0 || instr_valid)
+            $fatal(1, "fetch ADDR_WIDTH=%0d DATA_WIDTH=%0d: request after predictor reset failed", ADDR_WIDTH, DATA_WIDTH);
 
         // Walk two complete DATA_WIDTH words. This checks lane zero and every
         // upper instruction lane, as well as normal PC increments.

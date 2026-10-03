@@ -78,3 +78,25 @@ The retirement event is the valid MEM/WB entry, so instruction-cache waits,
 data-cache waits, load-use bubbles, and redirects are included in the cycle
 count. Use the same CSV columns and benchmark image when comparing this core
 with a Tomasulo or multicore implementation.
+
+## Validation roadmap
+
+When the core and toolchain support the required environment, validate in
+this order:
+
+1. Run the RISC-V Architectural Tests for ISA compliance and functional
+   correctness.
+2. Run Embench as the primary embedded performance benchmark.
+3. Run CoreMark as a standard integer-performance comparison.
+4. Add branch-prediction workloads covering tight backward loops, nested
+   loops, biased and alternating branches, correlated branches, and indirect
+   jumps.
+
+For each performance run, record IPC, total cycles, conditional branches,
+branch predictions, taken branches, branch mispredictions, cache misses,
+load-use stalls, redirects, and wait cycles. The two-bit BHT is initialized to
+strongly not-taken and uses saturating updates. Keep the same program image and
+memory configuration when comparing
+the in-order core with future branch predictors, Tomasulo, or multicore
+implementations. The architectural tests validate correctness; Embench,
+CoreMark, and the custom workloads measure performance.

@@ -88,8 +88,11 @@ def main():
         report_coverage(BUILD/'coverage.info')
     if metrics:
         metrics_path=BUILD/'ipc.csv'
-        metrics_path.write_text('run,program,retired,cycles,ipc,i_wait,d_wait,hazards,redirects\n' +
-                                ''.join(','.join(str(row[key]) for key in ('run','program','retired','cycles','ipc','i_wait','d_wait','hazards','redirects'))+'\n' for row in metrics))
+        columns=('run','program','retired','cycles','ipc','i_wait','d_wait','hazards',
+                 'branches','branch_taken','branch_predictions',
+                 'branch_mispredictions','redirects')
+        metrics_path.write_text(','.join(columns)+'\n' +
+                                ''.join(','.join(str(row[key]) for key in columns)+'\n' for row in metrics))
         print('IPC results:',metrics_path)
     print('PASS: requested core suites')
     print('Next issues: misaligned-access/trap policy; sustained fetch throughput; broader ISA compliance.')
@@ -117,11 +120,15 @@ def simulate(binary,path,name,args,coverage,i_delay=0,d_delay=0,jitter=0,metrics
     if 'PASS: tb_core_program' not in output: raise RuntimeError(name+' missing PASS')
     pass_line=next(line for line in output.splitlines() if line.startswith('PASS:'))
     print(pass_line)
-    match=re.search(r'retired=(\d+) .* cycles=(\d+) IPC=([0-9.]+).*I-wait=(\d+) D-wait=(\d+) hazards=(\d+) redirects=(\d+)',pass_line)
+    match=re.search(r'retired=(\d+) .* cycles=(\d+) IPC=([0-9.]+).*I-wait=(\d+) D-wait=(\d+) hazards=(\d+) branches=(\d+) branch-taken=(\d+) branch-predictions=(\d+) branch-mispredictions=(\d+) redirects=(\d+)',pass_line)
     if match and metrics is not None:
-        retired,cycles,ipc,i_wait,d_wait,hazards,redirects=match.groups()
+        retired,cycles,ipc,i_wait,d_wait,hazards,branches,branch_taken,branch_predictions,branch_mispredictions,redirects=match.groups()
         metrics.append({'run':name,'program':path.stem,'retired':retired,'cycles':cycles,'ipc':ipc,
-                        'i_wait':i_wait,'d_wait':d_wait,'hazards':hazards,'redirects':redirects})
+                        'i_wait':i_wait,'d_wait':d_wait,'hazards':hazards,
+                        'branches':branches,'branch_taken':branch_taken,
+                        'branch_predictions':branch_predictions,
+                        'branch_mispredictions':branch_mispredictions,
+                        'redirects':redirects})
     coverage.append(cov)
 
 
