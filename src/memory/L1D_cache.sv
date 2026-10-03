@@ -97,6 +97,8 @@
         logic [DATA_WIDTH-1:0] writedata;
         logic [DATA_WIDTH/8-1:0] writestrb;
         logic [DATA_WIDTH-1:0] readdata;
+        logic                  fast_response_valid;
+        logic [DATA_WIDTH-1:0] fast_response_data;
 
         
         // ============================================================
@@ -109,6 +111,13 @@
         logic [INDEX_BITS-1:0]  read_set_idx;
         logic [TAG_BITS-1:0]    read_tag;
         logic [WORD_OFFSET_BITS-1:0] read_word_off;
+
+        // Live-request lookup used for the one-cycle L1 hit path. Misses and
+        // configurations with LATENCY>1 continue to use the latched request
+        // state machine below.
+        logic [INDEX_BITS-1:0]  lookup_set_idx;
+        logic [TAG_BITS-1:0]    lookup_tag;
+        logic [WORD_OFFSET_BITS-1:0] lookup_word_off;
 
 
         // Write address decode
@@ -124,6 +133,22 @@
             end else begin : gen_single_word_line
                 assign write_word_off = '0;
                 assign read_word_off  = '0;
+            end
+        endgenerate
+
+        assign lookup_set_idx = (state == IDLE) ?
+                                l1d.daddr[OFFSET_BITS +: INDEX_BITS] :
+                                ((state == WRITE_WAIT) ? write_set_idx : read_set_idx);
+        assign lookup_tag = (state == IDLE) ?
+                            l1d.daddr[ADDR_WIDTH-1 -: TAG_BITS] :
+                            ((state == WRITE_WAIT) ? write_tag : read_tag);
+        generate
+            if (WORDS_PER_LINE > 1) begin : gen_lookup_word_offsets
+                assign lookup_word_off = (state == IDLE) ?
+                    l1d.daddr[BYTE_OFFSET_BITS +: WORD_OFFSET_BITS] :
+                    ((state == WRITE_WAIT) ? write_word_off : read_word_off);
+            end else begin : gen_lookup_single_word
+                assign lookup_word_off = '0;
             end
         endgenerate
 
@@ -163,6 +188,8 @@
                 readaddr  <= '0;
                 writeaddr <= '0;
                 readdata  <= '0;
+                fast_response_valid <= 1'b0;
+                fast_response_data <= '0;
                 writedata <= '0;
                 writestrb <= '0;
                 ar_sent   <= 1'b0;
@@ -184,13 +211,59 @@
                 case (state)
                     IDLE: begin
                         if (l1d.d_write) begin
-                            state <= WRITE_WAIT;
-                            writedata <= l1d.wdata; 
-                            writestrb <= l1d.wstrb;
-                            writeaddr <= l1d.daddr;
+                            if (LATENCY == 1 && hit) begin
+                                // Complete a write hit locally in one cycle.
+                                // The CPU can present the next memory
+                                // operation on the following cycle.
+                                state <= IDLE;
+                                fast_response_valid <= 1'b1;
+                                fast_response_data <= '0;
+                                for (int byte_index = 0; byte_index < DATA_WIDTH / 8; byte_index++) begin
+                                    if (l1d.wstrb[byte_index]) begin
+                                        data_array[lookup_set_idx][hit_way]
+                                        [lookup_word_off * DATA_WIDTH + byte_index * 8 +: 8]
+                                            <= l1d.wdata[byte_index * 8 +: 8];
+                                    end
+                                end
+                                dirty_array[lookup_set_idx][hit_way] <= 1'b1;
+                                for (int way = 0; way < NUM_WAYS; way++) begin
+                                    if (lru_rank[lookup_set_idx][way] < old_hit_rank) begin
+                                        lru_rank[lookup_set_idx][way] <=
+                                            lru_rank[lookup_set_idx][way] + 1'b1;
+                                    end else if (way == hit_way) begin
+                                        lru_rank[lookup_set_idx][hit_way] <= '0;
+                                    end
+                                end
+                            end else begin
+                                state <= WRITE_WAIT;
+                                fast_response_valid <= 1'b0;
+                                writedata <= l1d.wdata;
+                                writestrb <= l1d.wstrb;
+                                writeaddr <= l1d.daddr;
+                            end
                         end else if (l1d.d_read) begin
-                            state <= READ_WAIT;
-                            readaddr <= l1d.daddr;
+                            if (LATENCY == 1 && hit) begin
+                                // Read data is driven combinationally from
+                                // the resident line for this cycle.
+                                state <= IDLE;
+                                fast_response_valid <= 1'b1;
+                                fast_response_data <= data_array[lookup_set_idx][hit_way]
+                                                      [lookup_word_off * DATA_WIDTH +: DATA_WIDTH];
+                                for (int way = 0; way < NUM_WAYS; way++) begin
+                                    if (lru_rank[lookup_set_idx][way] < old_hit_rank) begin
+                                        lru_rank[lookup_set_idx][way] <=
+                                            lru_rank[lookup_set_idx][way] + 1'b1;
+                                    end else if (way == hit_way) begin
+                                        lru_rank[lookup_set_idx][hit_way] <= '0;
+                                    end
+                                end
+                            end else begin
+                                state <= READ_WAIT;
+                                fast_response_valid <= 1'b0;
+                                readaddr <= l1d.daddr;
+                            end
+                        end else begin
+                            fast_response_valid <= 1'b0;
                         end
                     end
 
@@ -406,7 +479,7 @@
             axi.bready  = 0;
 
             l1d.d_waitrequest = 1'b0;
-            l1d.data          = '0;
+            l1d.data          = fast_response_valid ? fast_response_data : '0;
 
             hit            = 1'b0;
             hit_way        = '0;
@@ -414,27 +487,32 @@
             victim_way     = '0;
             found_invalid  = 1'b0;
             block_is_dirty = 1'b0;
+
+            // Lookup against either the live IDLE request or the latched
+            // address held by the read/write wait states.
+            for (int way = 0; way < NUM_WAYS; way++) begin
+                if (valid_array[lookup_set_idx][way] &&
+                    tag_array[lookup_set_idx][way] == lookup_tag) begin
+                    hit = 1'b1;
+                    hit_way = way;
+                    old_hit_rank = lru_rank[lookup_set_idx][way];
+                end
+            end
             case (state)
                 IDLE: begin
                     if (l1d.d_write || l1d.d_read) begin
-                        l1d.d_waitrequest = 1'b1;
+                        if (LATENCY == 1 && hit) begin
+                            l1d.d_waitrequest = 1'b0;
+                            if (l1d.d_read && !l1d.d_write)
+                                l1d.data = data_array[lookup_set_idx][hit_way]
+                                           [lookup_word_off * DATA_WIDTH +: DATA_WIDTH];
+                        end else begin
+                            l1d.d_waitrequest = 1'b1;
+                        end
                     end
                 end
 
                 READ_WAIT: begin
-                    // hit case
-                    hit = 1'b0;
-                    hit_way = '0;
-                    old_hit_rank = '0;  
-                    // compare here
-                    for (int way = 0; way < NUM_WAYS; way++) begin
-                        if (valid_array[read_set_idx][way] 
-                        && tag_array[read_set_idx][way] == read_tag) begin
-                            hit = 1'b1;
-                            hit_way = way;
-                            old_hit_rank = lru_rank[read_set_idx][way];
-                        end 
-                    end
                     l1d.d_waitrequest = 1'b1;
 
                     // miss case
@@ -485,21 +563,6 @@
                 end
 
                 WRITE_WAIT: begin
-                    // no AXI signal update
-                    // just perform comparison to see if a hit occurs, if so which way
-                    hit = 1'b0;
-                    hit_way = '0;
-                    old_hit_rank = '0;
-
-                    // find the old rank and the correct way
-                    for (int way = 0; way < NUM_WAYS; way++) begin
-                        if (valid_array[write_set_idx][way] && 
-                        tag_array[write_set_idx][way] == write_tag) begin
-                            hit = 1'b1;
-                            hit_way = way;
-                            old_hit_rank = lru_rank[write_set_idx][way];
-                        end
-                    end
                     l1d.d_waitrequest = 1'b1;
 
                     // miss case

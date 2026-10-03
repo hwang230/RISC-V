@@ -91,6 +91,13 @@
         logic [TAG_BITS-1:0]    read_tag;
         logic [WORD_OFFSET_BITS-1:0] read_word_off;
 
+        // A one-cycle L1 hit can be served directly from the resident line.
+        // The line array therefore also acts as the instruction stream buffer:
+        // sequential fetches do not re-enter the miss/response state machine.
+        logic [INDEX_BITS-1:0]  lookup_set_idx;
+        logic [TAG_BITS-1:0]    lookup_tag;
+        logic [WORD_OFFSET_BITS-1:0] lookup_word_off;
+
         // Read address decode
         assign read_set_idx  = readaddr[OFFSET_BITS +: INDEX_BITS];
         assign read_tag      = readaddr[ADDR_WIDTH-1 -: TAG_BITS];
@@ -99,6 +106,21 @@
                 assign read_word_off = readaddr[BYTE_OFFSET_BITS +: WORD_OFFSET_BITS];
             end else begin : gen_single_word_line
                 assign read_word_off = '0;
+            end
+        endgenerate
+
+        // During IDLE the lookup is against the live CPU request. During a
+        // delayed transaction it is against the latched address.
+        assign lookup_set_idx = (state == IDLE) ?
+                                l1i.iaddr[OFFSET_BITS +: INDEX_BITS] : read_set_idx;
+        assign lookup_tag = (state == IDLE) ?
+                            l1i.iaddr[ADDR_WIDTH-1 -: TAG_BITS] : read_tag;
+        generate
+            if (WORDS_PER_LINE > 1) begin : gen_lookup_word_offset
+                assign lookup_word_off = (state == IDLE) ?
+                    l1i.iaddr[BYTE_OFFSET_BITS +: WORD_OFFSET_BITS] : read_word_off;
+            end else begin : gen_lookup_single_word
+                assign lookup_word_off = '0;
             end
         endgenerate
 
@@ -139,8 +161,23 @@
                 case (state) 
                     IDLE: begin
                         if (l1i.i_read) begin
-                            state <= READ_WAIT;
-                            readaddr <= l1i.iaddr;
+                            if (LATENCY == 1 && hit) begin
+                                // Fast hit: the CPU samples the line word on
+                                // this edge and the cache accepts the next
+                                // sequential request on the following edge.
+                                state <= IDLE;
+                                for (int way = 0; way < NUM_WAYS; way++) begin
+                                    if (lru_rank[lookup_set_idx][way] < old_hit_rank) begin
+                                        lru_rank[lookup_set_idx][way] <=
+                                            lru_rank[lookup_set_idx][way] + 1'b1;
+                                    end else if (way == hit_way) begin
+                                        lru_rank[lookup_set_idx][hit_way] <= '0;
+                                    end
+                                end
+                            end else begin
+                                state <= READ_WAIT;
+                                readaddr <= l1i.iaddr;
+                            end
                         end
                     end
 
@@ -252,29 +289,32 @@
             old_hit_rank = '0;
             victim_way = '0;
             found_invalid = 1'b0;
+
+            // The tag/data lookup is valid for both the live IDLE request and
+            // the address latched by a delayed transaction.
+            for (int way = 0; way < NUM_WAYS; way++) begin
+                if (valid_array[lookup_set_idx][way] &&
+                    tag_array[lookup_set_idx][way] == lookup_tag) begin
+                    hit = 1'b1;
+                    hit_way = way;
+                    old_hit_rank = lru_rank[lookup_set_idx][way];
+                end
+            end
             
             case (state) 
                 IDLE: begin
                     if (l1i.i_read) begin
-                        // to avoid sequentail latch delay
-                        l1i.i_waitrequest = 1'b1;
+                        if (LATENCY == 1 && hit) begin
+                            l1i.i_waitrequest = 1'b0;
+                            l1i.instr = data_array[lookup_set_idx][hit_way]
+                                        [lookup_word_off * DATA_WIDTH +: DATA_WIDTH];
+                        end else begin
+                            l1i.i_waitrequest = 1'b1;
+                        end
                     end
                 end
 
                 READ_WAIT: begin
-                    // no AXI signal update
-                    hit = 1'b0;
-                    hit_way = '0;
-                    old_hit_rank = '0;
-                    // compare here
-                    for (int way = 0; way < NUM_WAYS; way++) begin
-                        if (valid_array[read_set_idx][way] 
-                        && tag_array[read_set_idx][way] == read_tag) begin
-                            hit = 1'b1;
-                            hit_way = way;
-                            old_hit_rank = lru_rank[read_set_idx][way];
-                        end 
-                    end
                     l1i.i_waitrequest = 1'b1;
                 end
 

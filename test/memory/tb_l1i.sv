@@ -270,31 +270,41 @@ module tb_l1i #(
         @(posedge clk);
         @(negedge clk);
         start_cycle = cycle_count;
-        if (dut.state !== 2'd1 || dut.readaddr !== address || cpu.i_waitrequest !== 1'b1)
-            $fatal(1, "L1I did not latch a fetch into READ_WAIT");
-        cpu.i_read = 0;
-        while (cpu.i_waitrequest !== 1'b0) begin
-            elapsed = cycle_count - start_cycle;
-            if (elapsed >= REQUEST_TIMEOUT)
-                $fatal(1, "L1I fetch timed out address=%h state=%0d", address, dut.state);
-            if (dut.readaddr !== address)
-                $fatal(1, "L1I request address changed while busy");
-            if (elapsed < L1_LATENCY) begin
-                if (dut.state !== 2'd1 || int'(dut.latency_count) != elapsed)
-                    $fatal(1, "L1I lookup latency counter/state mismatch at age %0d", elapsed);
-            end else if (was_hit)
-                $fatal(1, "L1I hit response missed configured latency %0d", L1_LATENCY);
-            if (disturb_cpu_inputs) begin
-                cpu.iaddr = (address ^ 32'h0003ffc0) & (MEM_SIZE - 4);
-                cpu.i_read = (elapsed % 2 == 0);
+        if (L1_LATENCY == 1 && was_hit) begin
+            // A resident line is now a one-cycle CPU-facing hit and does not
+            // enter READ_WAIT/READ_RESP.
+            elapsed = 0;
+            if (dut.state !== 2'd0 || cpu.i_waitrequest !== 1'b0)
+                $fatal(1, "L1I fast hit did not complete in IDLE");
+        end else begin
+            if (dut.state !== 2'd1 || dut.readaddr !== address || cpu.i_waitrequest !== 1'b1)
+                $fatal(1, "L1I did not latch a fetch into READ_WAIT");
+            cpu.i_read = 0;
+            while (cpu.i_waitrequest !== 1'b0) begin
+                elapsed = cycle_count - start_cycle;
+                if (elapsed >= REQUEST_TIMEOUT)
+                    $fatal(1, "L1I fetch timed out address=%h state=%0d", address, dut.state);
+                if (dut.readaddr !== address)
+                    $fatal(1, "L1I request address changed while busy");
+                if (elapsed < L1_LATENCY) begin
+                    if (dut.state !== 2'd1 || int'(dut.latency_count) != elapsed)
+                        $fatal(1, "L1I lookup latency counter/state mismatch at age %0d", elapsed);
+                end else if (was_hit)
+                    $fatal(1, "L1I hit response missed configured latency %0d", L1_LATENCY);
+                if (disturb_cpu_inputs) begin
+                    cpu.iaddr = (address ^ 32'h0003ffc0) & (MEM_SIZE - 4);
+                    cpu.i_read = (elapsed % 2 == 0);
+                end
+                @(negedge clk);
             end
-            @(negedge clk);
+            elapsed = cycle_count - start_cycle;
         end
-        elapsed = cycle_count - start_cycle;
-        if (dut.state !== 2'd3 || cpu.instr !== reference_memory[address >> 2])
+        if ((L1_LATENCY == 1 && was_hit) ?
+            (cpu.instr !== reference_memory[address >> 2]) :
+            (dut.state !== 2'd3 || cpu.instr !== reference_memory[address >> 2]))
             $fatal(1, "L1I response mismatch at %h expected=%h got=%h state=%0d",
                    address, reference_memory[address >> 2], cpu.instr, dut.state);
-        if (was_hit && elapsed != L1_LATENCY)
+        if (was_hit && elapsed != ((L1_LATENCY == 1) ? 0 : L1_LATENCY))
             $fatal(1, "L1I hit latency expected=%0d got=%0d", L1_LATENCY, elapsed);
         if (transaction_ar != (was_hit ? 0 : WORDS_PER_LINE) ||
             transaction_r != (was_hit ? 0 : WORDS_PER_LINE) ||

@@ -34,7 +34,6 @@ module tb_core_directed;
 
     initial begin : tests
         logic [31:0] expected_value;
-        logic [31:0] saved_pc;
         logic [31:0] load_values [0:3];
         dut.u_memory_system.manual=1;
         force dut.instr=injected_instr;
@@ -45,7 +44,9 @@ module tb_core_directed;
         clear_pipeline();
 
         // Decode captures every control/data group; ADD and then a load-use
-        // hazard on each of rs1, rs2 and the MAC accumulator destination.
+        // dependency on each of rs1, rs2 and the MAC accumulator destination.
+        // Loads use the data-response bypass, so these dependencies do not
+        // require the old front-end bubble.
         injected_instr=32'h002081b3; // add x3,x1,x2
         injected_pc=32'h24;
         injected_valid=1;
@@ -78,9 +79,10 @@ module tb_core_directed;
                                           32'h0020828b; // mac x5,x1,x2
             injected_valid=1;
             #1;
-            check(dut.hazard_stall && dut.front_stall && !dut.decode_enable,"load-use detection");
+            check(!dut.hazard_stall && !dut.front_stall && dut.decode_enable,"load-use bypass avoids stall");
             tick();
-            check(!dut.id_ex_valid && dut.id_ex_rd==0 && dut.ex_mem_valid,"load advances, bubble inserted");
+            check(dut.id_ex_valid && dut.id_ex_rd==(operand==2 ? 5 : 6) && dut.ex_mem_valid,
+                  "load advances with dependent instruction");
             #1;
             check(!dut.hazard_stall,"load-use clears after one cycle");
             injected_valid=0;
@@ -124,7 +126,10 @@ module tb_core_directed;
                 end
                 dut.ex_mem_mem_read=1;
                 #1;
-                check(dut.forward_rs1_sel != 2,"never forward load address");
+                if (source==2 || source==3)
+                    check(dut.forward_rs1_sel == 3,"forward load response from data cache");
+                else
+                    check(dut.forward_rs1_sel != 3,"no load forwarding without EX/MEM producer");
                 dut.ex_mem_mem_read=0; dut.ex_mem_rd=0; dut.mem_wb_rd=0;
                 #1;
                 check(dut.forward_rs1_sel==0 && dut.forward_rs2_sel==0 && dut.forward_rd_old_sel==0,"never forward x0");
@@ -137,11 +142,11 @@ module tb_core_directed;
         dut.ex_mem_valid=1; dut.ex_mem_mem_write=1; dut.ex_mem_alu_result=32'h80000; dut.ex_mem_rs2_val=77;
         dut.mem_wb_valid=1; dut.mem_wb_reg_write=1; dut.mem_wb_rd=10; dut.mem_wb_alu_result=123;
         dut.u_memory_system.manual_d_wait=1;
-        #1; saved_pc=dut.u_fetch.pc;
+        #1;
         repeat(3) begin
             tick();
             check(dut.id_ex_valid && dut.id_ex_rs1_val==22 && dut.ex_mem_alu_result==32'h80000 && dut.d_wdata==77,"stall holds pipeline");
-            check(!dut.mem_wb_valid && dut.u_fetch.pc==saved_pc,"WB drains and PC holds");
+            check(!dut.mem_wb_valid && dut.u_fetch.queue_count != 0,"WB drains while fetch FIFO fills");
         end
         check(dut.u_regfile.regs[10]==123,"older WB completes during data wait");
         dut.u_memory_system.manual_d_wait=0;

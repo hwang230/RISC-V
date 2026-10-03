@@ -39,6 +39,7 @@ module core #(
     localparam logic [1:0] FWD_REG   = 2'b00;
     localparam logic [1:0] FWD_MEMWB = 2'b01;
     localparam logic [1:0] FWD_EXMEM = 2'b10;
+    localparam logic [1:0] FWD_DMEM  = 2'b11;
 
     // ------------------------------------------------------------------------
     // Fetch stage
@@ -63,7 +64,10 @@ module core #(
     fetch u_fetch (
         .clk(clk),
         .rst_n(rst_n),
-        .stall(front_stall),
+        // Fetch may continue filling its FIFO while the in-order backend is
+        // blocked by a data-side wait. The FIFO and redirect logic provide
+        // the required backpressure/flush behavior.
+        .stall(1'b0),
         .jump_en(jump_en),
         .jump_target(jump_target),
         .branch_update_valid(branch_update_valid),
@@ -257,6 +261,10 @@ module core #(
     logic [DATA_WIDTH-1:0] execute_rs2_val;
     logic [DATA_WIDTH-1:0] execute_rd_old_val;
     logic [DATA_WIDTH-1:0] ex_mem_forward_data;
+    logic [DATA_WIDTH-1:0] ex_mem_load_forward_data;
+    logic [DATA_WIDTH-1:0] decode_rs1_capture;
+    logic [DATA_WIDTH-1:0] decode_rs2_capture;
+    logic [DATA_WIDTH-1:0] decode_rd_old_capture;
     logic [1:0]            forward_rs1_sel;
     logic [1:0]            forward_rs2_sel;
     logic [1:0]            forward_rd_old_sel;
@@ -318,36 +326,107 @@ module core #(
     assign branch_update_pc = id_ex_instr_pc;
     assign branch_update_taken = alu_result[0];
 
-    // A load result is not available until MEM/WB. All other register-writing
-    // results can be forwarded from EX/MEM; MEM/WB supplies the final value
-    // for loads and older instructions.
-    assign hazard_stall = rst_n && instr_valid && id_ex_valid &&
-                          id_ex_mem_read && (id_ex_rd != 5'd0) &&
-                          ((cur_id_uses_rs1 && (id_ex_rd == instr[19:15])) ||
-                           (cur_id_uses_rs2 && (id_ex_rd == instr[24:20])) ||
-                           (cur_id_uses_rd_old && (id_ex_rd == instr[11:7])));
+    // A load-use dependency no longer needs a dedicated bubble. The load is
+    // allowed into EX/MEM, and the dependent instruction is held there until
+    // the data-side response is available for direct forwarding into EX.
+    // Keep hazard_stall as the externally visible *actual* stall metric; it is
+    // zero for dependencies handled by the data-response bypass.
+    assign hazard_stall = 1'b0;
+
+    // Format a load response while it is still on the data-cache interface.
+    // This is the same operation used for MEM/WB writeback, but it is needed
+    // one stage earlier for a dependent instruction executing behind a load.
+    always_comb begin
+        ex_mem_load_forward_data = '0;
+        case (ex_mem_mem_size)
+            MEM_BYTE: begin
+                if (ex_mem_mem_unsigned)
+                    ex_mem_load_forward_data = {{(DATA_WIDTH-8){1'b0}},
+                                                 d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 8]};
+                else
+                    ex_mem_load_forward_data = {{(DATA_WIDTH-8){d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) + 7]}},
+                                                 d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 8]};
+            end
+
+            MEM_HALF: begin
+                if (ex_mem_mem_unsigned)
+                    ex_mem_load_forward_data = {{(DATA_WIDTH-16){1'b0}},
+                                                 d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 16]};
+                else
+                    ex_mem_load_forward_data = {{(DATA_WIDTH-16){d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) + 15]}},
+                                                 d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 16]};
+            end
+
+            MEM_WORD: begin
+                ex_mem_load_forward_data = {{(DATA_WIDTH-32){d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) + 31]}},
+                                             d_rdata[(ex_mem_alu_result[BYTE_OFFSET_BITS-1:0] * 8) +: 32]};
+            end
+
+            default: begin
+                ex_mem_load_forward_data = '0;
+            end
+        endcase
+    end
 
     always_comb begin
         ex_mem_forward_data = '0;
         case (ex_mem_wb_sel)
             WB_ALU: ex_mem_forward_data = ex_mem_alu_result;
+            WB_LOAD: ex_mem_forward_data = ex_mem_load_forward_data;
             WB_PC4: ex_mem_forward_data = DATA_WIDTH'(ex_mem_instr_pc) + DATA_WIDTH'(4);
             WB_IMM: ex_mem_forward_data = ex_mem_imm_out;
             default: ex_mem_forward_data = '0;
         endcase
+
+        // Capture the youngest already-produced value when an instruction
+        // enters ID/EX. This matters when a following instruction is then
+        // held behind a long data miss: the producer may leave MEM/WB before
+        // the held instruction finally executes.
+        decode_rs1_capture = rs1_val;
+        decode_rs2_capture = rs2_val;
+        decode_rd_old_capture = rd_old_val;
+
+        if (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 5'd0) begin
+            if (mem_wb_rd == instr[19:15]) decode_rs1_capture = wb_data;
+            if (mem_wb_rd == instr[24:20]) decode_rs2_capture = wb_data;
+            if (mem_wb_rd == instr[11:7]) decode_rd_old_capture = wb_data;
+        end
+
+        if (ex_mem_valid && ex_mem_reg_write && ex_mem_rd != 5'd0 &&
+            (!ex_mem_mem_read || !d_waitrequest)) begin
+            if (ex_mem_rd == instr[19:15])
+                decode_rs1_capture = ex_mem_mem_read ? ex_mem_load_forward_data : ex_mem_forward_data;
+            if (ex_mem_rd == instr[24:20])
+                decode_rs2_capture = ex_mem_mem_read ? ex_mem_load_forward_data : ex_mem_forward_data;
+            if (ex_mem_rd == instr[11:7])
+                decode_rd_old_capture = ex_mem_mem_read ? ex_mem_load_forward_data : ex_mem_forward_data;
+        end
 
         forward_rs1_sel = FWD_REG;
         forward_rs2_sel = FWD_REG;
         forward_rd_old_sel = FWD_REG;
 
         if (id_ex_valid && ex_mem_valid && ex_mem_reg_write &&
-            !ex_mem_mem_read && (ex_mem_rd != 5'd0)) begin
-            if (ex_mem_rd == id_ex_rs1_addr)
-                forward_rs1_sel = FWD_EXMEM;
-            if (ex_mem_rd == id_ex_rs2_addr)
-                forward_rs2_sel = FWD_EXMEM;
-            if (ex_mem_rd == id_ex_rd)
-                forward_rd_old_sel = FWD_EXMEM;
+            (ex_mem_rd != 5'd0)) begin
+            if (ex_mem_mem_read) begin
+                // d_rdata is meaningful for the current EX/MEM load only
+                // when the cache has dropped waitrequest.
+                if (!d_waitrequest) begin
+                    if (ex_mem_rd == id_ex_rs1_addr)
+                        forward_rs1_sel = FWD_DMEM;
+                    if (ex_mem_rd == id_ex_rs2_addr)
+                        forward_rs2_sel = FWD_DMEM;
+                    if (ex_mem_rd == id_ex_rd)
+                        forward_rd_old_sel = FWD_DMEM;
+                end
+            end else begin
+                if (ex_mem_rd == id_ex_rs1_addr)
+                    forward_rs1_sel = FWD_EXMEM;
+                if (ex_mem_rd == id_ex_rs2_addr)
+                    forward_rs2_sel = FWD_EXMEM;
+                if (ex_mem_rd == id_ex_rd)
+                    forward_rd_old_sel = FWD_EXMEM;
+            end
         end
 
         if (id_ex_valid && mem_wb_valid && mem_wb_reg_write &&
@@ -362,18 +441,21 @@ module core #(
 
         case (forward_rs1_sel)
             FWD_EXMEM: execute_rs1_val = ex_mem_forward_data;
+            FWD_DMEM: execute_rs1_val = ex_mem_load_forward_data;
             FWD_MEMWB: execute_rs1_val = wb_data;
             default: execute_rs1_val = id_ex_rs1_val;
         endcase
 
         case (forward_rs2_sel)
             FWD_EXMEM: execute_rs2_val = ex_mem_forward_data;
+            FWD_DMEM: execute_rs2_val = ex_mem_load_forward_data;
             FWD_MEMWB: execute_rs2_val = wb_data;
             default: execute_rs2_val = id_ex_rs2_val;
         endcase
 
         case (forward_rd_old_sel)
             FWD_EXMEM: execute_rd_old_val = ex_mem_forward_data;
+            FWD_DMEM: execute_rd_old_val = ex_mem_load_forward_data;
             FWD_MEMWB: execute_rd_old_val = wb_data;
             default: execute_rd_old_val = id_ex_rd_old_val;
         endcase
@@ -483,12 +565,9 @@ module core #(
                 id_ex_instr_pc <= instr_pc;
                 // Decode and register writeback sample the same edge. Bypass
                 // WB here so ID/EX does not capture the pre-write register value.
-                id_ex_rs1_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
-                                 mem_wb_rd == instr[19:15]) ? wb_data : rs1_val;
-                id_ex_rs2_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
-                                 mem_wb_rd == instr[24:20]) ? wb_data : rs2_val;
-                id_ex_rd_old_val <= (mem_wb_valid && mem_wb_reg_write && mem_wb_rd != 0 &&
-                                    mem_wb_rd == instr[11:7]) ? wb_data : rd_old_val;
+                id_ex_rs1_val <= decode_rs1_capture;
+                id_ex_rs2_val <= decode_rs2_capture;
+                id_ex_rd_old_val <= decode_rd_old_capture;
                 id_ex_alu_op <= cur_id_alu_op;
                 id_ex_alu_src_imm <= cur_id_alu_src_imm;
                 id_ex_alu_src_pc <= cur_id_alu_src_pc;
@@ -579,9 +658,10 @@ module core #(
     // Control-flow resolution
     // ------------------------------------------------------------------------
     always_comb begin
-        // A queued instruction can decode while a younger fetch request is
-        // still waiting on the instruction cache.
-        fetch_enable = rst_n && !front_stall;
+        // Fetch runs independently and fills the instruction FIFO even while
+        // the in-order backend is blocked. Decode still waits for the backend
+        // to resume, so ID/EX remains stable during a data-cache wait.
+        fetch_enable = rst_n && !pipeline_stall;
         memory_advance = rst_n && !pipeline_stall;
 
         // Direct conditional branches use the prediction already applied in
@@ -590,7 +670,10 @@ module core #(
         jump_en = 1'b0;
         jump_target = '0;
 
-        if (id_ex_valid && id_ex_jump) begin
+        // A control-flow instruction resolves only when it can advance. This
+        // prevents a younger branch from redirecting fetch while an older
+        // memory operation is holding EX/MEM.
+        if (memory_advance && id_ex_valid && id_ex_jump) begin
             jump_en = 1'b1;
 
             if (id_ex_jalr) begin
@@ -602,7 +685,7 @@ module core #(
                 jump_target = ADDR_WIDTH'(id_ex_instr_pc) +
                               ADDR_WIDTH'(id_ex_imm_out);
             end
-        end else if (id_ex_valid && id_ex_branch && !id_ex_illegal_instr &&
+        end else if (memory_advance && id_ex_valid && id_ex_branch && !id_ex_illegal_instr &&
                      (id_ex_pred_taken != alu_result[0])) begin
             jump_en = 1'b1;
             if (alu_result[0]) begin

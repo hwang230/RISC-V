@@ -224,7 +224,7 @@ module tb_l1d #(
             if (axi.wvalid && !axi.wready) w_stalls++;
             if (active && txn_aw > txn_b && txn_w > txn_b && !axi.bvalid) b_waits++;
             if (active && cycle > started) begin
-                if (cycle - started <= L1_LATENCY && !cpu.d_waitrequest)
+                if (L1_LATENCY > 1 && cycle - started <= L1_LATENCY && !cpu.d_waitrequest)
                     $fatal(1, "L1D completed before configured lookup latency");
                 if (active_hit && cycle - started == L1_LATENCY + 1 && cpu.d_waitrequest)
                     $fatal(1, "L1D hit exceeded configured lookup latency");
