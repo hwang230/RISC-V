@@ -27,6 +27,9 @@ and flip-flops in this run.
 The SDC is an initial 10 ns / 100 MHz exploration constraint. Its 1 ns input
 and output delays, 0.2 ns setup uncertainty, 0.1 ns hold uncertainty, 0.1 ns
 clock transition and 5 fF output loads are provisional interface assumptions.
+Because no external minimum input-delay specification is available, input
+minimum delay is assumed to be 0 ns; CTS timing repair is enabled to insert
+delay where needed to satisfy hold checks under that worst-case assumption.
 There are no false-path or multicycle exceptions; reset remains timed as a
 synchronous input. This is not a signoff constraint set.
 

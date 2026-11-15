@@ -10,6 +10,8 @@ set_clock_transition 0.100 [get_clocks core_clock]
 # required time each consume 1 ns. This covers reset and both memory channels;
 # no multicycle or false-path exceptions are applied.
 set_input_delay  -max 1.000 -clock core_clock [get_ports {rst_n i_data[*] i_waitrequest d_rdata[*] d_waitrequest}]
+# No external minimum-delay specification is available. Assume 0 ns for a
+# conservative input-to-register hold check; the physical flow must repair it.
 set_input_delay  -min 0.000 -clock core_clock [get_ports {rst_n i_data[*] i_waitrequest d_rdata[*] d_waitrequest}]
 set_output_delay -max 1.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*]}]
 set_output_delay -min 0.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*]}]

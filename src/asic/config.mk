@@ -21,6 +21,6 @@ export NUM_CORES = 4
 # Early timing characterization only: avoid a long, non-convergent repair loop
 # before placement. Placement-stage parasitic timing reports remain enabled.
 export SKIP_FLOORPLAN_REPAIR_TIMING = 1
-# Keep the first post-CTS STA run bounded; CTS itself still inserts and
-# balances the clock tree, while timing repair is deferred to later tuning.
-export SKIP_CTS_REPAIR_TIMING = 1
+# Use ORFS post-CTS timing repair, including hold fixing, with the SDC's
+# conservative 0 ns minimum external input delay assumption.
+export SKIP_CTS_REPAIR_TIMING = 0
