@@ -26,6 +26,13 @@ The exhaustive 8-bit sweep performs over 1.6 million checks. Each test stops
 with `$fatal` on a mismatch; the runner requires the suite PASS marker to succeed.
 Build products are stored under `test/cpu/build/`.
 
+DIV/REM use a separate 32-stage radix-2 ready/valid pipeline. Its unit bench
+checks signed and unsigned quotient/remainder results at widths 2, 8, 32, and
+64, including sustained requests, tags, output backpressure, reset flushing,
+divide-by-zero, and signed overflow. The core currently waits for a divide
+result before decoding younger instructions; the divider interface is
+parameterized for tags and can be reused by a future out-of-order core.
+
 ## Integrated core tests
 
 Run the standalone core suite, the generated directed programs, and the real
@@ -43,8 +50,11 @@ RV32 reference model, and then loaded into the testbench.
 `assembly_files/program9.s` is a steady-state compute benchmark with a loop
 that fits in one instruction-cache line. `assembly_files/program10.s` is a
 steady-state load benchmark that repeatedly reads one warmed data-cache line
-and exercises the load-use path. Both use 1000 iterations so compulsory misses
-are amortized across the measurement window.
+and exercises the load-use path. `assembly_files/program11.s` is an
+independent-instruction benchmark with eight parallel accumulator chains and
+no memory operations in its hot loop. It establishes the single-issue baseline
+for a future OOO/superscalar implementation. These benchmarks use 1000
+iterations so compulsory misses are amortized across the measurement window.
 
 Run only one class of tests:
 
@@ -92,9 +102,15 @@ this order:
    loops, biased and alternating branches, correlated branches, and indirect
    jumps.
 
-For each performance run, record IPC, total cycles, conditional branches,
-branch predictions, taken branches, branch mispredictions, cache misses,
-load-use stalls, redirects, and wait cycles. The two-bit BHT is initialized to
+For each performance run, the CSV records IPC, total cycles, conditional
+branches, branch predictions, taken branches, branch mispredictions, cache
+wait cycles, load-use stalls, FIFO-empty/FIFO-full cycles, conditional-branch
+flush cycles, execute-busy cycles, and redirects. `I-wait` and `D-wait` count
+only cycles with a corresponding cache request. FIFO-empty counts fetch
+starvation while the backend could advance; FIFO-full shows fetch-buffer
+pressure, usually during a data-side stall. These counters intentionally
+overlap (for example, FIFO-full and D-wait can occur in the same cycle), so
+they are observability signals rather than additive CPI bins. The two-bit BHT is initialized to
 strongly not-taken and uses saturating updates. Keep the same program image and
 memory configuration when comparing
 the in-order core with future branch predictors, Tomasulo, or multicore

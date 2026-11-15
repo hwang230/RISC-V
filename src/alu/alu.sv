@@ -32,7 +32,6 @@ module alu #(
     logic [DATA_WIDTH-1:0] alu_rs2_val;
     logic [DATA_WIDTH-1:0] arithmetic_result;
     logic [DATA_WIDTH-1:0] branch_result;
-    logic [DATA_WIDTH-1:0] div_result;
     logic [DATA_WIDTH-1:0] logical_result;
     logic [DATA_WIDTH-1:0] mac_result;
     logic [DATA_WIDTH-1:0] multiply_result;
@@ -64,13 +63,6 @@ module alu #(
         .rs2_val(alu_rs2_val),
         .alu_op(cur_id_alu_op),
         .result(branch_result)
-    );
-
-    alu_div #(.DATA_WIDTH(DATA_WIDTH)) div_unit(
-        .rs1_val(alu_rs1_val),
-        .rs2_val(alu_rs2_val),
-        .alu_op(cur_id_alu_op),
-        .result(div_result)
     );
 
     alu_logical #(.DATA_WIDTH(DATA_WIDTH)) logical_unit(
@@ -128,7 +120,8 @@ module alu #(
             end
 
             ALU_DIV, ALU_DIVU, ALU_REM, ALU_REMU: begin
-                alu_result = div_result;
+                // DIV/REM are handled by the decoupled pipelined unit in core.
+                alu_result = '0;
             end
 
             ALU_MAC: begin

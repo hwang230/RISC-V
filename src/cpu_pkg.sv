@@ -1,3 +1,6 @@
+`ifndef CPU_PKG_SV
+`define CPU_PKG_SV
+
 package cpu_pkg;
 
     // --- Global Parameters ---
@@ -77,3 +80,5 @@ package cpu_pkg;
     } imm_src_e;
 
 endpackage : cpu_pkg
+
+`endif

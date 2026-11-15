@@ -72,10 +72,6 @@ module tb_alu_small_width #(
                 check(ALU_MULH, (signed_a * signed_b) >>> DATA_WIDTH);
                 check(ALU_MULHSU, (signed_a * b) >>> DATA_WIDTH);
                 check(ALU_MULHU, (a * b) >> DATA_WIDTH);
-                check(ALU_DIV, b == 0 ? -1 : signed_a / signed_b);
-                check(ALU_DIVU, b == 0 ? LIMIT - 1 : a / b);
-                check(ALU_REM, b == 0 ? a : signed_a % signed_b);
-                check(ALU_REMU, b == 0 ? a : a % b);
                 check(ALU_MAC, a * b + (a ^ b));
             end
         end
@@ -175,20 +171,6 @@ module tb_alu_widths(output logic done);
               64'h7fff_ffff_ffff_fffe);
         check("MULHU max squared", ALU_MULHU, ONES, ONES, 64'hffff_ffff_ffff_fffe);
         check("MULHU bit 32 squared", ALU_MULHU, 64'h1_0000_0000, 64'h1_0000_0000, 1);
-        check("DIV 64-bit dividend", ALU_DIV, MAXIMUM, 2, 64'h3fff_ffff_ffff_ffff);
-        check("DIV signed minimum", ALU_DIV, MINIMUM, 2, 64'hc000_0000_0000_0000);
-        check("DIV negative dividend", ALU_DIV, -64'd43, 5, -64'd8);
-        check("DIV negative divisor", ALU_DIV, 43, -64'd5, -64'd8);
-        check("DIV signed overflow", ALU_DIV, MINIMUM, ONES, MINIMUM);
-        check("DIV zero", ALU_DIV, MINIMUM, 0, ONES);
-        check("DIVU high bit", ALU_DIVU, ONES, 2, MAXIMUM);
-        check("DIVU zero", ALU_DIVU, MAXIMUM, 0, ONES);
-        check("REM negative dividend", ALU_REM, -64'd43, 5, -64'd3);
-        check("REM negative divisor", ALU_REM, 43, -64'd5, 3);
-        check("REM signed overflow", ALU_REM, MINIMUM, ONES, 0);
-        check("REM zero", ALU_REM, MINIMUM, 0, MINIMUM);
-        check("REMU unsigned high bit", ALU_REMU, ONES, MINIMUM, MAXIMUM);
-        check("REMU zero", ALU_REMU, ONES, 0, ONES);
         check("MAC retains upper accumulator", ALU_MAC, 3, 4, 64'h1_0000_000c,
               64'h1_0000_0000);
         check("MAC product wraps", ALU_MAC, MINIMUM, 2, 7, 7);

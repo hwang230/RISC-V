@@ -1,3 +1,10 @@
 /obj_dir
 /program_in_binary
 /assembly_files
+/src/asic/work/
+/src/asic/memory_work/
+/test/cpu/build/
+/test/cpu/obj_dir/
+/coverage.dat
+.DS_Store
+*.swp

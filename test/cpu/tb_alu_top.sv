@@ -67,14 +67,6 @@ module tb_alu_top(output logic done);
               32'd0, 32'd0, 1'b0, 32'hffff_ffff);
         check("MULHU", ALU_MULHU, 32'hffff_ffff, 32'hffff_ffff, 32'd0, 32'd0,
               1'b0, 32'hffff_fffe);
-        check("DIV", ALU_DIV, 32'hffff_ffd6, 32'd5, 32'd0, 32'd0, 1'b0,
-              32'hffff_fff8);
-        check("DIVU", ALU_DIVU, 32'hffff_ffff, 32'd2, 32'd0, 32'd0, 1'b0,
-              32'h7fff_ffff);
-        check("REM", ALU_REM, 32'hffff_ffd6, 32'd5, 32'd0, 32'd0, 1'b0,
-              32'hffff_fffe);
-        check("REMU", ALU_REMU, 32'hffff_ffff, 32'd2, 32'd0, 32'd0, 1'b0,
-              32'd1);
         check("MAC", ALU_MAC, 32'd3, 32'd4, 32'd5, 32'd0, 1'b0, 32'd17);
         pc_val = 32'h0000_1000;
         imm_val = 32'h0000_0200;
@@ -88,6 +80,6 @@ module tb_alu_top(output logic done);
               1'b0, 32'd0);
 
         done = 1'b1;
-        $display("PASS: tb_alu_top (all ALU operations and source mux)");
+        $display("PASS: tb_alu_top (combinational ALU operations and source mux)");
     end
 endmodule

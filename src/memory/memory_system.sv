@@ -3,14 +3,19 @@
 `include "L1I_cache.sv"
 `include "L1D_cache.sv"
 `include "L2_cache.sv"
+`ifndef ASIC_MEMORY_SYNTH
 `include "DRAM.sv"
+`endif
 
 // CPU-facing memory hierarchy: L1I and L1D share one L2 and one DRAM.
 module memory_system #(
     parameter integer ADDR_WIDTH = 32,
     parameter integer DATA_WIDTH = 32,
     parameter integer LINE_SIZE = 64,
+    // NUM_WAYS remains as a compatibility shorthand for equal associativity.
     parameter integer NUM_WAYS = 4,
+    parameter integer L1_NUM_WAYS = NUM_WAYS,
+    parameter integer L2_NUM_WAYS = NUM_WAYS,
     parameter integer L1_CACHE_SIZE = 64 * 1024,
     parameter integer L2_CACHE_SIZE = 256 * 1024,
     parameter integer L1_LATENCY = 1,
@@ -45,8 +50,10 @@ module memory_system #(
         if (DATA_WIDTH < 32 || (DATA_WIDTH % 32) != 0 ||
             (DATA_WIDTH & (DATA_WIDTH - 1)) != 0 || DATA_WIDTH > LINE_SIZE * 8)
             $fatal(1, "memory_system DATA_WIDTH must be a power-of-two multiple of 32 that fits in a cache line");
-        if (LINE_SIZE != 64 || NUM_WAYS != 4)
-            $fatal(1, "memory_system currently requires 64-byte lines and four ways");
+        if (LINE_SIZE != 64 || L1_NUM_WAYS < 1 ||
+            (L1_NUM_WAYS & (L1_NUM_WAYS - 1)) != 0 ||
+            L2_NUM_WAYS < 1 || (L2_NUM_WAYS & (L2_NUM_WAYS - 1)) != 0)
+            $fatal(1, "memory_system requires 64-byte lines and power-of-two L1/L2 associativity");
     end
 
     l1_cache_if #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) cpu_if();
@@ -72,7 +79,7 @@ module memory_system #(
     l1i_cache #(
         .CACHE_SIZE(L1_CACHE_SIZE),
         .LINE_SIZE(LINE_SIZE),
-        .NUM_WAYS(NUM_WAYS),
+        .NUM_WAYS(L1_NUM_WAYS),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
         .LATENCY(L1_LATENCY)
@@ -86,7 +93,7 @@ module memory_system #(
     l1d_cache #(
         .CACHE_SIZE(L1_CACHE_SIZE),
         .LINE_SIZE(LINE_SIZE),
-        .NUM_WAYS(NUM_WAYS),
+        .NUM_WAYS(L1_NUM_WAYS),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
         .LATENCY(L1_LATENCY)
@@ -100,7 +107,7 @@ module memory_system #(
     l2_cache #(
         .CACHE_SIZE(L2_CACHE_SIZE),
         .LINE_SIZE(LINE_SIZE),
-        .NUM_WAYS(NUM_WAYS),
+        .NUM_WAYS(L2_NUM_WAYS),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
         .LATENCY(L2_LATENCY)
@@ -112,6 +119,31 @@ module memory_system #(
         .axi_master(axi_l2_to_dram)
     );
 
+`ifdef ASIC_MEMORY_SYNTH
+    DRAM_MACRO #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .ADDR_WIDTH(ADDR_WIDTH)
+    ) dram (
+        .clk(clk),
+        .rst_n(rst_n),
+        .awaddr(axi_l2_to_dram.awaddr),
+        .awvalid(axi_l2_to_dram.awvalid),
+        .awready(axi_l2_to_dram.awready),
+        .wdata(axi_l2_to_dram.wdata),
+        .wvalid(axi_l2_to_dram.wvalid),
+        .wready(axi_l2_to_dram.wready),
+        .wstrb(axi_l2_to_dram.wstrb),
+        .bresp(axi_l2_to_dram.bresp),
+        .bvalid(axi_l2_to_dram.bvalid),
+        .bready(axi_l2_to_dram.bready),
+        .araddr(axi_l2_to_dram.araddr),
+        .arvalid(axi_l2_to_dram.arvalid),
+        .arready(axi_l2_to_dram.arready),
+        .rdata(axi_l2_to_dram.rdata),
+        .rvalid(axi_l2_to_dram.rvalid),
+        .rready(axi_l2_to_dram.rready)
+    );
+`else
     DRAM #(
         .MEM_SIZE(DRAM_SIZE),
         .LINE_SIZE(LINE_SIZE),
@@ -123,4 +155,5 @@ module memory_system #(
         .rst_n(rst_n),
         .axi(axi_l2_to_dram)
     );
+`endif
 endmodule

@@ -50,6 +50,8 @@ def main():
     parser.add_argument('--max-cycles',type=int,default=2000000)
     parser.add_argument('--l1-size',type=int,default=64*1024)
     parser.add_argument('--l2-size',type=int,default=256*1024)
+    parser.add_argument('--l1-ways',type=int,default=4)
+    parser.add_argument('--l2-ways',type=int,default=4)
     parser.add_argument('--l1-latency',type=int,default=1)
     parser.add_argument('--l2-latency',type=int,default=5)
     parser.add_argument('--dram-latency',type=int,default=80)
@@ -73,6 +75,7 @@ def main():
                 simulate(binary,path,f'{name}_i{i_delay}_d{d_delay}',args,coverage,i_delay,d_delay,jitter,metrics)
     if args.suite in ('all','programs') or args.program:
         config={'L1_CACHE_SIZE':args.l1_size,'L2_CACHE_SIZE':args.l2_size,
+                'L1_NUM_WAYS':args.l1_ways,'L2_NUM_WAYS':args.l2_ways,
                 'L1_LATENCY':args.l1_latency,'L2_LATENCY':args.l2_latency,
                 'DRAM_LATENCY':args.dram_latency}
         binary=build('tb_core_program',False,args.waves,config)
@@ -88,7 +91,9 @@ def main():
         report_coverage(BUILD/'coverage.info')
     if metrics:
         metrics_path=BUILD/'ipc.csv'
-        columns=('run','program','retired','cycles','ipc','i_wait','d_wait','hazards',
+        columns=('run','program','retired','cycles','ipc','i_wait','d_wait',
+                 'load_use_stalls','fifo_empty_cycles','fifo_full_cycles',
+                 'branch_flush_cycles','execute_busy_cycles',
                  'branches','branch_taken','branch_predictions',
                  'branch_mispredictions','redirects')
         metrics_path.write_text(','.join(columns)+'\n' +
@@ -106,7 +111,8 @@ def simulate(binary,path,name,args,coverage,i_delay=0,d_delay=0,jitter=0,metrics
              'program4':{3:17,6:34,7:35,9:40},'program5':{9:8,10:9,11:11},
              'program6':{7:35,8:35,9:34,10:39},'program7':{10:14,11:14,12:17},
              'program8':{1:45,2:6,3:6},'program9':{1:1000,2:0,3:1},
-             'program10':{1:1000,2:0,5:1,6:1}}
+             'program10':{1:1000,2:0,5:1,6:1},
+             'program11':{1:1000,2:2000,3:3000,5:5000,6:6000,7:7000,8:8000,10:0}}
     if path.parent==ROOT/'assembly_files':
         for r,value in anchors.get(path.stem,{}).items():
             if regs[r]!=value: raise RuntimeError(f'reference disagrees with handwritten {path.stem} x{r}={value}, got {regs[r]}')
@@ -120,11 +126,18 @@ def simulate(binary,path,name,args,coverage,i_delay=0,d_delay=0,jitter=0,metrics
     if 'PASS: tb_core_program' not in output: raise RuntimeError(name+' missing PASS')
     pass_line=next(line for line in output.splitlines() if line.startswith('PASS:'))
     print(pass_line)
-    match=re.search(r'retired=(\d+) .* cycles=(\d+) IPC=([0-9.]+).*I-wait=(\d+) D-wait=(\d+) hazards=(\d+) branches=(\d+) branch-taken=(\d+) branch-predictions=(\d+) branch-mispredictions=(\d+) redirects=(\d+)',pass_line)
+    match=re.search(r'retired=(\d+) .* cycles=(\d+) IPC=([0-9.]+).*I-wait=(\d+) D-wait=(\d+) load-use-stalls=(\d+) FIFO-empty=(\d+) FIFO-full=(\d+) branch-flush=(\d+) EX-busy=(\d+) branches=(\d+) branch-taken=(\d+) branch-predictions=(\d+) branch-mispredictions=(\d+) redirects=(\d+)',pass_line)
     if match and metrics is not None:
-        retired,cycles,ipc,i_wait,d_wait,hazards,branches,branch_taken,branch_predictions,branch_mispredictions,redirects=match.groups()
+        (retired,cycles,ipc,i_wait,d_wait,load_use_stalls,fifo_empty_cycles,
+         fifo_full_cycles,branch_flush_cycles,execute_busy_cycles,branches,
+         branch_taken,branch_predictions,branch_mispredictions,redirects)=match.groups()
         metrics.append({'run':name,'program':path.stem,'retired':retired,'cycles':cycles,'ipc':ipc,
-                        'i_wait':i_wait,'d_wait':d_wait,'hazards':hazards,
+                        'i_wait':i_wait,'d_wait':d_wait,
+                        'load_use_stalls':load_use_stalls,
+                        'fifo_empty_cycles':fifo_empty_cycles,
+                        'fifo_full_cycles':fifo_full_cycles,
+                        'branch_flush_cycles':branch_flush_cycles,
+                        'execute_busy_cycles':execute_busy_cycles,
                         'branches':branches,'branch_taken':branch_taken,
                         'branch_predictions':branch_predictions,
                         'branch_mispredictions':branch_mispredictions,

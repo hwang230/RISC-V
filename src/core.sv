@@ -1,7 +1,9 @@
 `include "cpu_pkg.sv"
 `include "./alu/alu.sv"
+`ifndef CORE_ASIC_SYNTH
 `ifndef CORE_STANDALONE
 `include "./memory/memory_system.sv"
+`endif
 `endif
 `include "decoder.sv"
 `include "fetch.sv"
@@ -15,6 +17,8 @@ module core #(
     parameter int ADDR_WIDTH = 32,
     parameter int L1_CACHE_SIZE = 64 * 1024,
     parameter int L2_CACHE_SIZE = 256 * 1024,
+    parameter int L1_NUM_WAYS = 4,
+    parameter int L2_NUM_WAYS = 4,
     parameter int L1_LATENCY = 1,
     parameter int L2_LATENCY = 5,
     parameter int DRAM_LATENCY = 80,
@@ -22,7 +26,34 @@ module core #(
 )(
     input logic clk,
     input logic rst_n
+`ifdef CORE_ASIC_SYNTH
+    , output logic                   i_read
+    , output logic [ADDR_WIDTH-1:0]   i_addr
+    , input  logic [DATA_WIDTH-1:0]   i_data
+    , input  logic                   i_waitrequest
+    , output logic                   d_read
+    , output logic                   d_write
+    , output logic [ADDR_WIDTH-1:0]   d_addr
+    , output logic [DATA_WIDTH-1:0]   d_wdata
+    , output logic [DATA_WIDTH/8-1:0] d_wstrb
+    , input  logic [DATA_WIDTH-1:0]   d_rdata
+    , input  logic                   d_waitrequest
+`endif
 );
+
+`ifndef CORE_ASIC_SYNTH
+    logic                    i_read;
+    logic [ADDR_WIDTH-1:0]    i_addr;
+    logic [DATA_WIDTH-1:0]    i_data;
+    logic                    i_waitrequest;
+    logic                    d_read;
+    logic                    d_write;
+    logic [ADDR_WIDTH-1:0]    d_addr;
+    logic [DATA_WIDTH-1:0]    d_wdata;
+    logic [DATA_WIDTH/8-1:0]  d_wstrb;
+    logic [DATA_WIDTH-1:0]    d_rdata;
+    logic                    d_waitrequest;
+`endif
 
     localparam int BYTE_LANES        = DATA_WIDTH / 8;
     localparam int BYTE_OFFSET_BITS  = $clog2(BYTE_LANES);
@@ -49,10 +80,6 @@ module core #(
     logic                  branch_update_valid;
     logic [ADDR_WIDTH-1:0] branch_update_pc;
     logic                  branch_update_taken;
-    logic                  i_read;
-    logic [ADDR_WIDTH-1:0] i_addr;
-    logic [DATA_WIDTH-1:0] i_data;
-    logic                  i_waitrequest;
     logic [DATA_WIDTH-1:0] instr;
     logic                  instr_valid;
     logic [ADDR_WIDTH-1:0] instr_pc;
@@ -195,17 +222,16 @@ module core #(
     // ------------------------------------------------------------------------
     // Memory stage
     // ------------------------------------------------------------------------
-    logic                  d_read;
-    logic                  d_write;
-    logic [ADDR_WIDTH-1:0] d_addr;
-    logic [DATA_WIDTH-1:0] d_wdata;
-    logic [BYTE_LANES-1:0]  d_wstrb;
-    logic [DATA_WIDTH-1:0] d_rdata;
-    logic                  d_waitrequest;
-
+`ifndef CORE_ASIC_SYNTH
     memory_system #(
         .L1_CACHE_SIZE(L1_CACHE_SIZE),
         .L2_CACHE_SIZE(L2_CACHE_SIZE),
+`ifdef CORE_STANDALONE
+        .NUM_WAYS(L1_NUM_WAYS),
+`else
+        .L1_NUM_WAYS(L1_NUM_WAYS),
+        .L2_NUM_WAYS(L2_NUM_WAYS),
+`endif
         .L1_LATENCY(L1_LATENCY),
         .L2_LATENCY(L2_LATENCY),
         .DRAM_LATENCY(DRAM_LATENCY),
@@ -225,6 +251,7 @@ module core #(
         .d_rdata(d_rdata),
         .d_waitrequest(d_waitrequest)
     );
+`endif
 
     // ------------------------------------------------------------------------
     // Pipeline registers
@@ -311,6 +338,19 @@ module core #(
     logic fetch_enable;
     logic decode_enable;
     logic memory_advance;
+    logic id_ex_is_div;
+    logic div_instruction_hold;
+    logic div_pending;
+    logic div_req_valid;
+    logic div_req_ready;
+    logic div_resp_valid;
+    logic div_resp_ready;
+    logic div_result_accept;
+    logic [DATA_WIDTH-1:0] div_resp_result;
+    logic [4:0] div_resp_tag;
+    logic [4:0] div_req_tag;
+    logic div_req_signed;
+    logic div_req_remainder;
 
     // ------------------------------------------------------------------------
     // Memory request and pipeline control signals
@@ -320,6 +360,46 @@ module core #(
     assign d_addr  = ex_mem_alu_result;
     assign pipeline_stall = rst_n && d_waitrequest;
     assign front_stall = pipeline_stall || hazard_stall;
+
+    assign id_ex_is_div = (id_ex_alu_op == ALU_DIV) ||
+                          (id_ex_alu_op == ALU_DIVU) ||
+                          (id_ex_alu_op == ALU_REM) ||
+                          (id_ex_alu_op == ALU_REMU);
+    assign div_req_signed = (id_ex_alu_op == ALU_DIV) || (id_ex_alu_op == ALU_REM);
+    assign div_req_remainder = (id_ex_alu_op == ALU_REM) || (id_ex_alu_op == ALU_REMU);
+    assign div_req_tag = id_ex_rd;
+    assign div_req_valid = rst_n && id_ex_valid && id_ex_is_div &&
+                           !div_pending && !pipeline_stall;
+    assign div_resp_ready = div_pending && !pipeline_stall;
+    assign div_result_accept = div_pending && div_resp_valid && div_resp_ready;
+    assign div_instruction_hold = id_ex_valid && id_ex_is_div && !div_result_accept;
+
+    alu_div #(.DATA_WIDTH(DATA_WIDTH), .TAG_WIDTH(5)) u_divider (
+        .clk(clk),
+        .rst_n(rst_n),
+        .req_valid(div_req_valid),
+        .req_ready(div_req_ready),
+        .req_dividend(execute_rs1_val),
+        .req_divisor(execute_rs2_val),
+        .req_signed(div_req_signed),
+        .req_remainder(div_req_remainder),
+        .req_tag(div_req_tag),
+        .resp_valid(div_resp_valid),
+        .resp_ready(div_resp_ready),
+        .resp_result(div_resp_result),
+        .resp_tag(div_resp_tag)
+    );
+
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            div_pending <= 1'b0;
+        end else begin
+            if (div_req_valid && div_req_ready)
+                div_pending <= 1'b1;
+            if (div_result_accept)
+                div_pending <= 1'b0;
+        end
+    end
 
     assign branch_update_valid = memory_advance && id_ex_valid &&
                                  id_ex_branch && !id_ex_illegal_instr;
@@ -581,7 +661,7 @@ module core #(
                 id_ex_mem_size <= cur_id_mem_size;
                 id_ex_mem_unsigned <= cur_id_mem_unsigned;
                 id_ex_illegal_instr <= cur_id_illegal_instr;
-            end else if (!pipeline_stall) begin
+            end else if (!pipeline_stall && !div_instruction_hold) begin
                 // No fetched instruction this cycle: insert a bubble.
                 id_ex_valid <= 1'b0;
 
@@ -616,20 +696,39 @@ module core #(
 
             // EX/MEM: advance only when the data-side request is not stalled.
             if (memory_advance) begin
-                ex_mem_valid <= id_ex_valid;
-                ex_mem_wb_sel <= id_ex_wb_sel;
-                ex_mem_reg_write <= id_ex_reg_write;
-                ex_mem_rd <= id_ex_rd;
-                ex_mem_imm_out <= id_ex_imm_out;
-                ex_mem_instr_pc <= id_ex_instr_pc;
-                ex_mem_alu_result <= alu_result;
-                ex_mem_mem_to_reg_write <= id_ex_mem_to_reg_write;
-                ex_mem_mem_read <= id_ex_mem_read;
-                ex_mem_mem_write <= id_ex_mem_write;
-                ex_mem_mem_size <= id_ex_mem_size;
-                ex_mem_mem_unsigned <= id_ex_mem_unsigned;
-                ex_mem_illegal_instr <= id_ex_illegal_instr;
-                ex_mem_rs2_val <= execute_rs2_val;
+                if (id_ex_valid && id_ex_is_div) begin
+                    // The divider request leaves ID/EX immediately. Keep a
+                    // bubble in EX/MEM until its tagged result returns.
+                    ex_mem_valid <= div_result_accept;
+                    ex_mem_wb_sel <= id_ex_wb_sel;
+                    ex_mem_reg_write <= div_result_accept && id_ex_reg_write;
+                    ex_mem_rd <= div_resp_tag;
+                    ex_mem_imm_out <= id_ex_imm_out;
+                    ex_mem_instr_pc <= id_ex_instr_pc;
+                    ex_mem_alu_result <= div_result_accept ? div_resp_result : '0;
+                    ex_mem_mem_to_reg_write <= 1'b0;
+                    ex_mem_mem_read <= 1'b0;
+                    ex_mem_mem_write <= 1'b0;
+                    ex_mem_mem_size <= id_ex_mem_size;
+                    ex_mem_mem_unsigned <= id_ex_mem_unsigned;
+                    ex_mem_illegal_instr <= id_ex_illegal_instr;
+                    ex_mem_rs2_val <= '0;
+                end else begin
+                    ex_mem_valid <= id_ex_valid;
+                    ex_mem_wb_sel <= id_ex_wb_sel;
+                    ex_mem_reg_write <= id_ex_reg_write;
+                    ex_mem_rd <= id_ex_rd;
+                    ex_mem_imm_out <= id_ex_imm_out;
+                    ex_mem_instr_pc <= id_ex_instr_pc;
+                    ex_mem_alu_result <= alu_result;
+                    ex_mem_mem_to_reg_write <= id_ex_mem_to_reg_write;
+                    ex_mem_mem_read <= id_ex_mem_read;
+                    ex_mem_mem_write <= id_ex_mem_write;
+                    ex_mem_mem_size <= id_ex_mem_size;
+                    ex_mem_mem_unsigned <= id_ex_mem_unsigned;
+                    ex_mem_illegal_instr <= id_ex_illegal_instr;
+                    ex_mem_rs2_val <= execute_rs2_val;
+                end
             end
 
             // MEM/WB: capture the memory response and writeback metadata.
@@ -661,7 +760,7 @@ module core #(
         // Fetch runs independently and fills the instruction FIFO even while
         // the in-order backend is blocked. Decode still waits for the backend
         // to resume, so ID/EX remains stable during a data-cache wait.
-        fetch_enable = rst_n && !pipeline_stall;
+        fetch_enable = rst_n && !pipeline_stall && !div_instruction_hold;
         memory_advance = rst_n && !pipeline_stall;
 
         // Direct conditional branches use the prediction already applied in
