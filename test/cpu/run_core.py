@@ -79,7 +79,27 @@ int main(int argc, char** argv) {{
     cmd=[tool('verilator'),'--cc','--exe','--build','--timing','--assert','--coverage-line',
          '-Wno-fatal','-Wno-MODDUP','-Wno-TIMESCALEMOD','--top-module',top,'--Mdir',obj,'-j','4',
          '-I'+str(ROOT/'src'),'-I'+str(ROOT/'src/alu'),'-I'+str(ROOT/'src/memory')]
+    # Verilator 5.020 must unroll array reset loops to preserve nonblocking
+    # assignments. Budget iterations and AST nodes for backend storage and,
+    # in hierarchy builds, cache metadata (including every way).
+    memory=config or {}
+    loop_sizes=[64]
+    statement_sizes=[30000]
+    if backend=='ooo':
+        capacities=[memory.get(name,value) for name,value in DEFAULTS.items()]
+        capacities.append(sum(memory.get(name,DEFAULTS[name]) for name in
+                              ('INT_ENTRIES','MUL_ENTRIES','DIV_ENTRIES','MEM_ENTRIES')))
+        loop_sizes.extend(capacities)
+        statement_sizes.extend(128*capacity for capacity in capacities)
     if standalone: cmd += ['+define+CORE_STANDALONE',HERE/'core_test_memory.sv']
+    else:
+        geometries=((memory.get('L1_CACHE_SIZE',64*1024),memory.get('L1_NUM_WAYS',4)),
+                    (memory.get('L2_CACHE_SIZE',256*1024),memory.get('L2_NUM_WAYS',4)))
+        if any(size<=0 or ways<=0 for size,ways in geometries):
+            raise ValueError('cache sizes and associativities must be positive')
+        loop_sizes.extend(max(size//(64*ways),ways) for size,ways in geometries)
+        statement_sizes.extend(128*(size//64) for size,_ in geometries)
+    cmd += ['--unroll-count',str(max(loop_sizes)),'--unroll-stmts',str(max(statement_sizes))]
     if backend=='ooo': cmd += ['+define+OOO_BACKEND']
     if config: cmd += [f'-G{name}={value}' for name,value in config.items()]
     if waves: cmd += ['--trace']
