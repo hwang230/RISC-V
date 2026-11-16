@@ -1,15 +1,13 @@
 `timescale 1ns/1ps
 // Structural tests intentionally inject pipeline states. This exercises paths
 // hidden by the current fetch bubbles. Program tests separately prove reachability
-// and architectural behavior without forcing any core signals.
+// and architectural behavior through the retirement interface.
 module tb_core_directed;
     import cpu_pkg::*;
     logic clk=0, rst_n=0;
     always #5 clk=~clk;
     core dut(.clk(clk),.rst_n(rst_n));
     int checks=0;
-    logic [31:0] injected_instr=0, injected_pc=0;
-    logic injected_valid=0;
 
     task automatic check(input bit condition,input string message);
         checks++;
@@ -21,9 +19,37 @@ module tb_core_directed;
         @(negedge clk);
     endtask
 
+    // Load the real fetch FIFO instead of forcing its output nets. Verilator
+    // 5.020 does not propagate force overrides through this module boundary.
+    task automatic inject_instruction(input logic [31:0] instruction,
+                                      input logic [31:0] pc);
+        dut.u_memory_system.manual_i_wait=1;
+        dut.u_fetch.queue_head=0;
+        dut.u_fetch.queue_tail=1;
+        dut.u_fetch.queue_count=1;
+        dut.u_fetch.instr_queue[0]=instruction;
+        dut.u_fetch.pc_queue[0]=pc;
+        dut.u_fetch.pred_queue[0]=0;
+    endtask
+
+    task automatic inject_two_instructions(input logic [31:0] first_instruction,
+                                           input logic [31:0] first_pc,
+                                           input logic [31:0] second_instruction,
+                                           input logic [31:0] second_pc);
+        dut.u_memory_system.manual_i_wait=1;
+        dut.u_fetch.queue_head=0;
+        dut.u_fetch.queue_tail=2;
+        dut.u_fetch.queue_count=2;
+        dut.u_fetch.instr_queue[0]=first_instruction;
+        dut.u_fetch.pc_queue[0]=first_pc;
+        dut.u_fetch.pred_queue[0]=0;
+        dut.u_fetch.instr_queue[1]=second_instruction;
+        dut.u_fetch.pc_queue[1]=second_pc;
+        dut.u_fetch.pred_queue[1]=0;
+    endtask
+
     task automatic clear_pipeline();
         rst_n=0;
-        injected_valid=0;
         dut.u_memory_system.manual_d_wait=0;
         dut.u_memory_system.manual_i_wait=0;
         tick();
@@ -36,9 +62,6 @@ module tb_core_directed;
         logic [31:0] expected_value;
         logic [31:0] load_values [0:3];
         dut.u_memory_system.manual=1;
-        force dut.instr=injected_instr;
-        force dut.instr_valid=injected_valid;
-        force dut.instr_pc=injected_pc;
         for (int r=1;r<32;r++) dut.u_regfile.regs[r]=32'(r*10);
         @(negedge clk);
         clear_pipeline();
@@ -47,15 +70,12 @@ module tb_core_directed;
         // dependency on each of rs1, rs2 and the MAC accumulator destination.
         // Loads use the data-response bypass, so these dependencies do not
         // require the old front-end bubble.
-        injected_instr=32'h002081b3; // add x3,x1,x2
-        injected_pc=32'h24;
-        injected_valid=1;
+        inject_instruction(32'h002081b3,32'h24); // add x3,x1,x2
         #1;
         check(dut.decode_enable,"decode enable");
         tick();
         check(dut.id_ex_valid && dut.id_ex_rs1_val==10 && dut.id_ex_rs2_val==20 &&
               dut.id_ex_rd_old_val==30 && dut.id_ex_rd==3 && dut.id_ex_instr_pc==32'h24,"decode latches");
-        injected_valid=0;
         tick();
         check(dut.ex_mem_valid && dut.ex_mem_alu_result==30,"execute latches");
         tick();
@@ -63,21 +83,19 @@ module tb_core_directed;
         tick();
         check(dut.u_regfile.regs[3]==30,"register write");
         clear_pipeline();
-        injected_instr=32'h0052828b; // mac x5,x5,x5, all three WB-to-ID bypasses
-        injected_valid=1;
+        inject_instruction(32'h0052828b,32'h28); // mac x5,x5,x5, all three WB-to-ID bypasses
         dut.mem_wb_valid=1; dut.mem_wb_reg_write=1; dut.mem_wb_rd=5; dut.mem_wb_alu_result=91;
         tick();
         check(dut.id_ex_rs1_val==91 && dut.id_ex_rs2_val==91 && dut.id_ex_rd_old_val==91,"same-cycle WB/decode bypass");
-        injected_valid=0;
         for (int operand=0;operand<3;operand++) begin
             clear_pipeline();
             dut.id_ex_valid=1;
             dut.id_ex_mem_read=1;
             dut.id_ex_rd=5;
-            injected_instr=(operand==0) ? 32'h00128333 : // add x6,x5,x1
-                           (operand==1) ? 32'h00508333 : // add x6,x1,x5
-                                          32'h0020828b; // mac x5,x1,x2
-            injected_valid=1;
+            inject_instruction((operand==0) ? 32'h00128333 : // add x6,x5,x1
+                                (operand==1) ? 32'h00508333 : // add x6,x1,x5
+                                               32'h0020828b, // mac x5,x1,x2
+                                32'h2c);
             #1;
             check(!dut.hazard_stall && !dut.front_stall && dut.decode_enable,"load-use bypass avoids stall");
             tick();
@@ -85,14 +103,13 @@ module tb_core_directed;
                   "load advances with dependent instruction");
             #1;
             check(!dut.hazard_stall,"load-use clears after one cycle");
-            injected_valid=0;
         end
         clear_pipeline();
         dut.id_ex_valid=1; dut.id_ex_mem_read=1; dut.id_ex_rd=0;
-        injected_instr=32'h00000013; injected_valid=1;
+        inject_instruction(32'h00000013,32'h30);
         #1; check(!dut.hazard_stall,"x0 creates no load-use stall");
         dut.id_ex_rd=5;
-        injected_instr=32'h00500313; // addi has no rs2 despite immediate bits
+        inject_instruction(32'h00500313,32'h30); // addi has no rs2 despite immediate bits
         #1; check(!dut.hazard_stall,"unused source field creates no hazard");
 
         // Forwarding defaults, all three inputs, both producers, and youngest
@@ -231,8 +248,7 @@ module tb_core_directed;
             if (kind!=3) check(!dut.id_ex_valid && dut.ex_mem_valid && dut.id_ex_rd==0,"flush younger only");
         end
         clear_pipeline();
-        injected_valid=1; injected_instr=32'h00100093;
-        dut.u_memory_system.manual_i_wait=1;
+        inject_two_instructions(32'h00100093,32'h34,32'h00200113,32'h38);
         // A queued instruction may decode while a younger fetch request waits.
         #1; check(dut.fetch_enable && dut.decode_enable,"instruction wait does not block queued decode");
         tick();

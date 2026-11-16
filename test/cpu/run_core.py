@@ -22,14 +22,25 @@ SWEEPS={'INT_ENTRIES':(4,8,12),'MUL_ENTRIES':(2,4,8),'DIV_ENTRIES':(1,2,4),
 DELAYS=((0,0,0),(1,5,1),(7,2,1))
 
 
-def run(command,log):
-    result=subprocess.run([str(x) for x in command],cwd=ROOT,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+def run(command,log,cwd=ROOT):
+    result=subprocess.run([str(x) for x in command],cwd=cwd,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
     log.parent.mkdir(parents=True,exist_ok=True)
     log.write_text(result.stdout)
     if result.returncode:
         print(result.stdout[-14000:])
         raise RuntimeError(f'command failed ({result.returncode}); full log: {log}')
     return result.stdout
+
+
+def run_covered(command,log,run_dir):
+    """Require fresh coverage from every successful simulation, on all versions."""
+    run_dir.mkdir(parents=True,exist_ok=True)
+    coverage=run_dir/'coverage.dat'
+    if coverage.exists(): coverage.unlink()
+    output=run(command,log,cwd=run_dir)
+    if not coverage.is_file() or coverage.stat().st_size==0:
+        raise RuntimeError(f'simulation produced no coverage; expected fresh nonempty {coverage}')
+    return output,coverage
 
 
 def tool(name):
@@ -41,14 +52,38 @@ def build(top,standalone,waves,backend,build_dir,config=None):
     build_dir.mkdir(parents=True,exist_ok=True)
     tag=top+('_standalone' if standalone else '_hierarchy')+('_waves' if waves else '')+'_'+sys.platform
     obj=build_dir/tag
-    cmd=[tool('verilator'),'--binary','--timing','--assert','--coverage-line',
+    # Verilator 5.020's generated --binary main never writes coverage. Use an
+    # explicit timing loop and coverage write on every supported version.
+    main=build_dir/(top+'_main.cpp')
+    source=f'''#include "verilated.h"
+#include "verilated_cov.h"
+#include "V{top}.h"
+#include <memory>
+
+int main(int argc, char** argv) {{
+    auto context = std::make_unique<VerilatedContext>();
+    context->traceEverOn(true);
+    context->commandArgs(argc, argv);
+    auto top = std::make_unique<V{top}>(context.get());
+    while (!context->gotFinish()) {{
+        top->eval();
+        if (!top->eventsPending()) break;
+        context->time(top->nextTimeSlot());
+    }}
+    top->final();
+    context->coveragep()->write("coverage.dat");
+    return context->gotFinish() ? 0 : 1;
+}}
+'''
+    if not main.exists() or main.read_text()!=source: main.write_text(source)
+    cmd=[tool('verilator'),'--cc','--exe','--build','--timing','--assert','--coverage-line',
          '-Wno-fatal','-Wno-MODDUP','-Wno-TIMESCALEMOD','--top-module',top,'--Mdir',obj,'-j','4',
          '-I'+str(ROOT/'src'),'-I'+str(ROOT/'src/alu'),'-I'+str(ROOT/'src/memory')]
     if standalone: cmd += ['+define+CORE_STANDALONE',HERE/'core_test_memory.sv']
     if backend=='ooo': cmd += ['+define+OOO_BACKEND']
     if config: cmd += [f'-G{name}={value}' for name,value in config.items()]
     if waves: cmd += ['--trace']
-    cmd += [ROOT/('src/ooo_core.sv' if backend=='ooo' else 'src/core.sv'),HERE/(top+'.sv')]
+    cmd += [ROOT/('src/ooo_core.sv' if backend=='ooo' else 'src/core.sv'),HERE/(top+'.sv'),main]
     print('Building '+backend+'/'+str(build_dir.relative_to(BUILD_ROOT))+'/'+tag,flush=True)
     run(cmd,build_dir/(tag+'.build.log'))
     return obj/('V'+top)
@@ -89,11 +124,13 @@ def simulate(binary,path,name,args,backend,build_dir,coverage,i_delay=0,d_delay=
     if path.parent==ROOT/'assembly_files':
         for r,value in anchors.get(path.stem,{}).items():
             if regs[r]!=value: raise RuntimeError(f'reference disagrees with handwritten {path.stem} x{r}={value}, got {regs[r]}')
-    cov=build_dir/(name+'.dat')
+    run_dir=build_dir/'runs'/name
+    # The portable C++ main writes coverage.dat in its working directory;
+    # isolate each run so coverage files do not overwrite one another.
     metrics_path=build_dir/(name+'.metrics.json')
     cmd=[binary,f'+image={image}',f'+trace={trace}',f'+stores={stores}',f'+trace_count={nt}',f'+store_count={ns}',
          f'+stop_pc={pc}',f'+max_cycles={args.max_cycles}',f'+i_delay={i_delay}',f'+d_delay={d_delay}',f'+jitter={jitter}',
-         f'+metrics={metrics_path}','+verilator+coverage+file+'+str(cov)]
+         f'+metrics={metrics_path}']
     _,labels=assemble(path.read_text())
     for label in ('overlap_div','overlap_add','overlap_dep'):
         if label in labels: cmd += [f'+{label}_pc={labels[label]}']
@@ -101,12 +138,12 @@ def simulate(binary,path,name,args,backend,build_dir,coverage,i_delay=0,d_delay=
         cmd += ['+check_overlap=1']
     if args.waves: cmd += [f'+waves={build_dir/(name+".vcd")}']
     print('Running '+backend+'/'+name,flush=True)
-    output=run(cmd,build_dir/(name+'.log'))
+    output,cov=run_covered(cmd,build_dir/(name+'.log'),run_dir)
     if 'PASS: tb_core_program' not in output: raise RuntimeError(name+' missing PASS')
     print(next(line for line in output.splitlines() if line.startswith('PASS:')))
     metrics=json.loads(metrics_path.read_text())
     metrics.update(backend=backend,run=name,program=path.stem,i_delay=i_delay,d_delay=d_delay,jitter=jitter)
-    if cov.exists(): coverage.append(cov)
+    coverage.append(cov)
     return metrics
 
 
@@ -118,9 +155,10 @@ def run_backend(args,backend,config):
     if args.suite in ('all','standalone') and not args.program:
         if backend=='inorder' and not args.case:
             binary=build('tb_core_directed',True,args.waves,backend,build_dir)
-            output=run([binary],build_dir/'directed.log')
+            output,cov=run_covered([binary],build_dir/'directed.log',build_dir/'runs'/'directed')
             if 'PASS: tb_core_directed' not in output: raise RuntimeError('directed test did not pass')
             print(next(line for line in output.splitlines() if line.startswith('PASS: tb_core_directed')))
+            coverage.append(cov)
         binary=build('tb_core_program',True,args.waves,backend,build_dir,config if backend=='ooo' else None)
         for path in generated_programs(build_dir,backend,args.case):
             for i_delay,d_delay,jitter in DELAYS:
