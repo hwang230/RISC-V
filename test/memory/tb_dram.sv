@@ -39,6 +39,10 @@ module tb_dram #(
     bit read_pending = 0, address_pending = 0, data_pending = 0;
     bit write_pending = 0;
     integer read_cycle = 0, write_cycle = 0;
+    integer required_read_latency = DRAM_LATENCY;
+    integer required_write_latency = DRAM_LATENCY;
+    bit model_read_stream_valid = 0, model_write_stream_valid = 0;
+    logic [31:0] model_read_stream_address = '0, model_write_stream_address = '0;
     logic [31:0] expected_read_data, pending_write_address, pending_write_data;
     bit stalled_ar = 0, stalled_aw = 0, stalled_w = 0;
     bit stalled_r = 0, stalled_b = 0;
@@ -83,6 +87,12 @@ module tb_dram #(
             address_pending = 0;
             data_pending = 0;
             write_pending = 0;
+            required_read_latency = DRAM_LATENCY;
+            required_write_latency = DRAM_LATENCY;
+            model_read_stream_valid = 0;
+            model_write_stream_valid = 0;
+            model_read_stream_address = '0;
+            model_write_stream_address = '0;
             stalled_ar = 0;
             stalled_aw = 0;
             stalled_w = 0;
@@ -115,6 +125,10 @@ module tb_dram #(
                     $fatal(1, "DRAM accepted a read while another transaction is pending");
                 read_pending = 1;
                 read_cycle = cycle_count;
+                required_read_latency = model_read_stream_valid &&
+                    ((axi.araddr & ~32'(64-1)) == (model_read_stream_address & ~32'(64-1))) &&
+                    (axi.araddr == model_read_stream_address + 4) ? 1 : DRAM_LATENCY;
+                model_write_stream_valid = 0;
                 expected_read_data = reference_memory[axi.araddr >> 2];
                 ar_count = ar_count + 1;
             end
@@ -138,25 +152,33 @@ module tb_dram #(
             if (!write_pending && address_pending && data_pending) begin
                 write_pending = 1;
                 write_cycle = cycle_count;
+                required_write_latency = model_write_stream_valid &&
+                    ((pending_write_address & ~32'(64-1)) == (model_write_stream_address & ~32'(64-1))) &&
+                    (pending_write_address == model_write_stream_address + 4) ? 1 : DRAM_LATENCY;
+                model_read_stream_valid = 0;
             end
 
             if (axi.rvalid) begin
-                if (!read_pending || cycle_count - read_cycle < DRAM_LATENCY)
+                if (!read_pending || cycle_count - read_cycle < required_read_latency)
                     $fatal(1, "DRAM unexpected or early RVALID");
                 if (axi.rdata !== expected_read_data)
                     $fatal(1, "DRAM read mismatch: expected %h got %h", expected_read_data, axi.rdata);
                 if (axi.rready) begin
                     r_count = r_count + 1;
+                    model_read_stream_valid = 1;
+                    model_read_stream_address = axi.araddr;
                     read_pending = 0;
                 end
             end
             if (axi.bvalid) begin
-                if (!write_pending || cycle_count - write_cycle < DRAM_LATENCY)
+                if (!write_pending || cycle_count - write_cycle < required_write_latency)
                     $fatal(1, "DRAM unexpected or early BVALID; AW and W must precede B");
                 if (dut.memory[pending_write_address >> 2] !== pending_write_data)
                     $fatal(1, "DRAM write did not update memory[%h]", pending_write_address);
                 if (axi.bready) begin
                     reference_memory[pending_write_address >> 2] = pending_write_data;
+                    model_write_stream_valid = 1;
+                    model_write_stream_address = pending_write_address;
                     b_count = b_count + 1;
                     write_pending = 0;
                     address_pending = 0;
@@ -177,7 +199,7 @@ module tb_dram #(
 
             #1;
             if (read_pending) begin
-                if (cycle_count - read_cycle < DRAM_LATENCY) begin
+                if (cycle_count - read_cycle < required_read_latency) begin
                     if (axi.rvalid !== 1'b0)
                         $fatal(1, "DRAM RVALID before configured latency");
                     if (dut.latency_count !== cycle_count - read_cycle)
@@ -189,7 +211,7 @@ module tb_dram #(
                 $fatal(1, "DRAM RVALID without outstanding read");
 
             if (write_pending) begin
-                if (cycle_count - write_cycle < DRAM_LATENCY) begin
+                if (cycle_count - write_cycle < required_write_latency) begin
                     if (axi.bvalid !== 1'b0)
                         $fatal(1, "DRAM BVALID before configured latency");
                     if (dut.latency_count !== cycle_count - write_cycle)

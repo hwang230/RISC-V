@@ -25,7 +25,20 @@ module core #(
     parameter int DRAM_SIZE = 1024 * 1024
 )(
     input logic clk,
-    input logic rst_n
+    input logic rst_n,
+    output logic retire_valid,
+    output logic [31:0] retire_pc,
+    output logic [31:0] retire_instr,
+    output logic retire_rd_we,
+    output logic [4:0] retire_rd,
+    output logic [31:0] retire_rd_data,
+    output logic retire_mem_we,
+    output logic [31:0] retire_mem_addr,
+    output logic [31:0] retire_mem_data,
+    output logic [3:0] retire_mem_strb,
+    output logic retire_trap,
+    output logic [31:0] retire_cause,
+    output logic [31:0] retire_tval
 `ifdef CORE_ASIC_SYNTH
     , output logic                   i_read
     , output logic [ADDR_WIDTH-1:0]   i_addr
@@ -328,6 +341,47 @@ module core #(
 
     // Writeback formatting.
     logic [DATA_WIDTH-1:0] wb_data;
+
+    // Common architectural observation interface shared with ooo_core.
+    // These metadata registers never feed pipeline control or execution.
+    logic [31:0] id_ex_instr, ex_mem_instr, mem_wb_instr;
+    logic mem_wb_store;
+    logic [31:0] mem_wb_store_addr, mem_wb_store_data;
+    logic [3:0] mem_wb_store_strb;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            id_ex_instr <= 0;
+            ex_mem_instr <= 0;
+            mem_wb_instr <= 0;
+            mem_wb_store <= 0;
+            mem_wb_store_addr <= 0;
+            mem_wb_store_data <= 0;
+            mem_wb_store_strb <= 0;
+        end else begin
+            if (decode_enable) id_ex_instr <= instr[31:0];
+            if (memory_advance) begin
+                ex_mem_instr <= id_ex_instr;
+                mem_wb_instr <= ex_mem_instr;
+                mem_wb_store <= ex_mem_valid && ex_mem_mem_write;
+                mem_wb_store_addr <= 32'(d_addr);
+                mem_wb_store_data <= 32'(d_wdata);
+                mem_wb_store_strb <= 4'(d_wstrb);
+            end
+        end
+    end
+    assign retire_valid = rst_n && mem_wb_valid;
+    assign retire_pc = 32'(mem_wb_instr_pc);
+    assign retire_instr = mem_wb_instr;
+    assign retire_rd_we = retire_valid && mem_wb_reg_write && mem_wb_rd != 0;
+    assign retire_rd = mem_wb_rd;
+    assign retire_rd_data = 32'(wb_data);
+    assign retire_mem_we = retire_valid && mem_wb_store;
+    assign retire_mem_addr = mem_wb_store_addr;
+    assign retire_mem_data = mem_wb_store_data;
+    assign retire_mem_strb = mem_wb_store_strb;
+    assign retire_trap = 1'b0;
+    assign retire_cause = 0;
+    assign retire_tval = 0;
     logic [DATA_WIDTH-1:0] load_data_formatted;
     logic [7:0]             load_byte;
     logic [15:0]            load_half;

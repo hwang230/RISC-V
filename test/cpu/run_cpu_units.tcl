@@ -1,6 +1,9 @@
 set script_dir [file dirname [file normalize [info script]]]
 set repo_root [file normalize [file join $script_dir ../..]]
 set build_dir [file join $script_dir build cpu_units]
+if {[info exists ::env(TEST_BUILD_DIR)]} {
+    set build_dir [file normalize $::env(TEST_BUILD_DIR)]
+}
 set obj_dir [file join $build_dir obj]
 set src_dir [file join $repo_root src]
 

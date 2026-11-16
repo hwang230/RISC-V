@@ -13,9 +13,9 @@ set_input_delay  -max 1.000 -clock core_clock [get_ports {rst_n i_data[*] i_wait
 # No external minimum-delay specification is available. Assume 0 ns for a
 # conservative input-to-register hold check; the physical flow must repair it.
 set_input_delay  -min 0.000 -clock core_clock [get_ports {rst_n i_data[*] i_waitrequest d_rdata[*] d_waitrequest}]
-set_output_delay -max 1.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*]}]
-set_output_delay -min 0.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*]}]
+set_output_delay -max 1.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*] retire_*}]
+set_output_delay -min 0.000 -clock core_clock [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*] retire_*}]
 
 # Provisional interface electrical assumptions.
 set_input_transition 0.100 [get_ports {rst_n i_data[*] i_waitrequest d_rdata[*] d_waitrequest}]
-set_load 5.000 [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*]}]
+set_load 5.000 [get_ports {i_read i_addr[*] d_read d_write d_addr[*] d_wdata[*] d_wstrb[*] retire_*}]

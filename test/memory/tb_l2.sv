@@ -64,12 +64,13 @@ module tb_l2 #(
     int unsigned request_hit_cross [0:2][0:1];
     int unsigned replacement_cross [0:2][0:1];
     bit active = 0, active_write, active_i, active_hit, response_seen;
+    bit previous_request_valid, previous_request_write;
     bit pending_aw = 0, pending_w = 0;
     logic [31:0] pending_addr, pending_data;
     logic [31:0] active_addr, active_data;
-    int active_set, active_way, active_age, active_start;
+    int active_set, active_way, active_age, active_start, active_lookup_latency;
     int txn_ar, txn_r, txn_aw, txn_w, txn_b;
-    logic [31:0] last_refill_addr;
+    logic [31:0] last_refill_addr, previous_request_addr;
     int unsigned seed = 1, random_iters = 200, rng;
     string wave_file;
 
@@ -134,6 +135,14 @@ module tb_l2 #(
         active_addr = address;
         active_data = data;
         active_start = cycle;
+        // The cache shortens the lookup phase to one cycle for sequential word
+        // requests in the same line. Keep this expectation independent of DUT
+        // stream flags by deriving it from completed transactions in the monitor.
+        active_lookup_latency = L2_LATENCY;
+        if (previous_request_valid && previous_request_write == is_write &&
+            (address & 32'hffffffc0) == (previous_request_addr & 32'hffffffc0) &&
+            address == previous_request_addr + 4)
+            active_lookup_latency = 1;
         response_seen = 0;
         active_set = (address / 64) % NUM_SETS;
         active_way = lookup_way(address);
@@ -179,6 +188,9 @@ module tb_l2 #(
             if (g_backend.backend.memory[active_addr / 4] !== active_data)
                 $fatal(1, "write-through failed at %08x", active_addr);
         end
+        previous_request_valid = 1;
+        previous_request_write = active_write;
+        previous_request_addr = active_addr;
         old_rank = expected_rank[active_set][active_way];
         for (int way = 0; way < 4; way++) begin
             if (way != active_way) begin
@@ -204,6 +216,9 @@ module tb_l2 #(
             active = 0;
             pending_aw = 0;
             pending_w = 0;
+            previous_request_valid = 0;
+            previous_request_write = 0;
+            previous_request_addr = '0;
             for (int set_number = 0; set_number < NUM_SETS; set_number++)
                 for (int way = 0; way < 4; way++) begin
                     expected_valid[set_number][way] = 0;
@@ -229,9 +244,9 @@ module tb_l2 #(
             if (active && cycle > active_start) begin
                 active_age = cycle - active_start;
                 if (int'(dut.owner) != (active_i ? 1 : 2)) $fatal(1, "request owner changed");
-                if (active_age <= L2_LATENCY && int'(dut.state) != (active_write ? WRITE_WAIT : READ_WAIT))
+                if (active_age <= active_lookup_latency && int'(dut.state) != (active_write ? WRITE_WAIT : READ_WAIT))
                     $fatal(1, "lookup did not preserve configured latency age=%0d state=%0d", active_age, dut.state);
-                if (active_age == L2_LATENCY + 1) begin
+                if (active_age == active_lookup_latency + 1) begin
                     if (int'(dut.state) != (active_write ? (active_hit ? WRITE_THROUGH : WRITE_MISS)
                                                                       : (active_hit ? READ_RESP : READ_MISS)))
                         $fatal(1, "wrong lookup result/latency state=%0d hit=%0d write=%0d", dut.state, active_hit, active_write);
@@ -286,7 +301,7 @@ module tb_l2 #(
                 if ((active_i ? axi_i.rdata : axi_d.rdata) !== reference_memory[active_addr / 4])
                     $fatal(1, "L1 read mismatch addr=%08x got=%08x expected=%08x", active_addr,
                            active_i ? axi_i.rdata : axi_d.rdata, reference_memory[active_addr / 4]);
-                if (!response_seen && active_hit && cycle - active_start != L2_LATENCY + 1)
+                if (!response_seen && active_hit && cycle - active_start != active_lookup_latency + 1)
                     $fatal(1, "wrong read hit response latency");
                 response_seen = 1;
                 if (active_i ? axi_i.rready : axi_d.rready) finish_transaction();

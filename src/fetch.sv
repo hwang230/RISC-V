@@ -144,6 +144,25 @@ module fetch #(
 
     assign i_addr = pc;
 
+    // Separate fixed-index processes keep synchronous initialization portable
+    // to Verilator 5.020, whose runtime loops cannot reset unpacked arrays
+    // with nonblocking assignments (BLKLOOPINIT).
+    for (genvar entry = 0; entry < BHT_ENTRIES; entry++) begin : gen_bht
+        always_ff @(posedge clk) begin
+            if (!rst_n) begin
+                bht[entry] <= 2'b00; // strongly not taken
+            end else if (branch_update_valid &&
+                         branch_update_index == BHT_INDEX_BITS'(entry)) begin
+                if (branch_update_taken) begin
+                    if (bht[entry] != 2'b11)
+                        bht[entry] <= bht[entry] + 2'b01;
+                end else if (bht[entry] != 2'b00) begin
+                    bht[entry] <= bht[entry] - 2'b01;
+                end
+            end
+        end
+    end
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             pc <= ADDR_WIDTH'(PC_RESET_VEC);
@@ -152,21 +171,9 @@ module fetch #(
             queue_count <= '0;
             request_pending <= 1'b0;
             discard_response <= 1'b0;
-            for (int bht_entry = 0; bht_entry < BHT_ENTRIES; bht_entry++)
-                bht[bht_entry] <= 2'b00; // strongly not taken
         end 
 
         else begin
-            if (branch_update_valid) begin
-                if (branch_update_taken) begin
-                    if (bht[branch_update_index] != 2'b11)
-                        bht[branch_update_index] <= bht[branch_update_index] + 2'b01;
-                end else begin
-                    if (bht[branch_update_index] != 2'b00)
-                        bht[branch_update_index] <= bht[branch_update_index] - 2'b01;
-                end
-            end
-
             // A redirect has priority over queue movement. All buffered
             // instructions are younger than the resolving control-flow
             // instruction and must be discarded.

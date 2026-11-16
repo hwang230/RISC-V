@@ -6,13 +6,27 @@ Hope I get to commit daily to this project. It will go very slowly but one day s
 
 ## Project Status
 
-- **Out-of-order (OOO) execution support — in development:** Adding support for executing independent instructions out of program order while preserving correct architectural results.
-- **AXI protocol for the memory interface:** The current memory interface is based on AXI-Lite, with separate read and write channels using valid/ready handshakes. Integration of the memory system is ongoing.
-- **Outstanding transactions — work in progress:** Working on support for multiple memory requests in flight, including tracking pending requests and their responses so a new request can be issued before an earlier one completes.
+The repository keeps the in-order core in `src/core.sv` and provides a separate,
+single-dispatch out-of-order backend in `src/ooo_core.sv`. Both can be checked
+against the same architectural retirement trace. The out-of-order backend
+supports RV32IM and Zicsr with custom three-source MAC, machine-mode synchronous
+traps, a reorder buffer, physical-register renaming, ordered head-only memory
+accesses, and elastic tagged multiply/divide units. Its default storage sizes
+and current implementation limits are documented in [the OOO backend guide](src/ooo/README.md).
+
+Run `python3 test/cpu/run_core.py --backend both --suite all` from the repository
+root to compare both cores against the reference model. Add `--sweep` to test
+issue-queue, ROB and physical-register sizes. The AXI-Lite memory subsystem uses
+separate valid/ready read and write channels; multiple speculative data-memory
+requests and interrupts are not supported by the OOO backend.
 
 # ALU Subsystem: Instruction Encoding & Control Logic
 
-This document details the 5-bit control signal encoding for the Arithmetic Logic Unit (ALU). The design is fully compliant with the **RV32I** base integer instruction set and the **RV32M** standard extension, with additional custom support for **MAC (Multiply-Accumulate)** operations to accelerate AI and DSP workloads.
+This document details the 5-bit control signal encoding for the arithmetic
+datapath. The core implements RV32I/RV32M operations and adds a custom MAC
+(multiply-accumulate) operation. The separate OOO backend also implements
+Zicsr and the machine-only synchronous trap subset described above; see its
+guide for precise CSR behavior and unsupported features.
 
 ## 1. Control Signal Specification
 The ALU is driven by a 5-bit signal (`alu_op_e`). This allows for up to 32 distinct operations, partitioned into arithmetic, logical, branch, and specialized math categories.

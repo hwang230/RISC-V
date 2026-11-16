@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - codex/pipelined-divider
+      - codex/ooo-design
   workflow_dispatch:
 
 permissions:
@@ -13,12 +14,15 @@ jobs:
   verilator:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    outputs:
+      asic_matrix: ${{ steps.sizing.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Verilator and build tools
         run: |
           sudo apt-get update
           sudo apt-get install --yes verilator tclsh python3 g++ make
+          verilator --version
       - name: Run CPU unit tests
         run: |
           mkdir -p test/cpu/build/remote
@@ -28,19 +32,68 @@ jobs:
         run: |
           set -o pipefail
           tclsh test/cpu/run_decoder.tcl 2>&1 | tee test/cpu/build/remote/decoder.log
-      - name: Run generated and real-memory CPU programs
+      - name: Run OOO execution and CSR unit tests
         run: |
           set -o pipefail
-          python3 test/cpu/run_core.py --suite all 2>&1 | tee test/cpu/build/remote/core_all.log
+          python3 test/cpu/run_ooo_units.py 2>&1 | tee test/cpu/build/remote/ooo_units.log
+      - name: Compare both backends and sweep queue and storage capacities
+        run: |
+          set -o pipefail
+          python3 test/cpu/run_core.py --backend both --suite all --sweep 2>&1 | tee test/cpu/build/remote/core_all.log
+      - name: Prepare physical sizing candidates
+        id: sizing
+        run: |
+          python3 src/asic/sizing_manifest.py test/cpu/build/core/sizing/recommendations.json --output test/cpu/build/core/sizing
+          echo "matrix=$(cat test/cpu/build/core/sizing/asic_matrix.json)" >> "$GITHUB_OUTPUT"
+      - name: Compare in-order against selected OOO capacities
+        run: |
+          set -euo pipefail
+          mkdir -p test/cpu/build/core/sizing
+          cp test/cpu/build/core/ipc_comparison.csv test/cpu/build/core/sizing/default_ipc_comparison.csv
+          selected_args=()
+          while IFS='=' read -r key value; do
+            option="--${key,,}"
+            option="${option//_/-}"
+            selected_args+=("$option" "$value")
+          done < test/cpu/build/core/sizing/selected_overrides.txt
+          python3 test/cpu/run_core.py --backend both --suite all \
+            --build-root test/cpu/build/core/selected "${selected_args[@]}" \
+            2>&1 | tee test/cpu/build/remote/selected_comparison.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: verilator-results
           path: |
             test/cpu/build/remote/
-            test/cpu/build/core/*.log
-            test/cpu/build/core/ipc.csv
-            test/cpu/build/core/coverage.info
+            test/cpu/build/core/**/*.log
+            test/cpu/build/core/**/*.csv
+            test/cpu/build/core/**/*.json
+            test/cpu/build/core/**/*.md
+            test/cpu/build/core/**/*.txt
+            test/cpu/build/core/**/coverage.info
+            test/cpu/build/ooo_units/*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  physical-comparison:
+    needs: [verilator, nangate45, sizing-area]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: evidence
+      - name: Join measured area and cycle results
+        run: |
+          python3 src/asic/compare_sizing.py \
+            --recommendations evidence/verilator-results/core/sizing/recommendations.json \
+            --artifacts evidence --output src/asic/work/comparison
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: physical-sizing-comparison
+          path: src/asic/work/comparison/
           if-no-files-found: warn
           retention-days: 30
 
@@ -48,25 +101,78 @@ jobs:
     needs: verilator
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [inorder, ooo_default, ooo_selected]
     env:
       DOCKER_IMAGE: openroad/orfs@sha256:31c5fd29e541059e36ad87b197ece981c04d2ce3a1f2035976fe266ec0e521cb
-      ORFS_FLOW_DIR: ${{ github.workspace }}/orfs
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          repository: The-OpenROAD-Project/OpenROAD-flow-scripts
-          ref: 73c804d45dc4084b05e0536dab69053b3bf9e591
-          path: orfs
-      - name: Run Nangate45 synthesis through CTS
-        run: ./asic/run.sh cts
+          name: verilator-results
+          path: verification
+      - name: Run Nangate45 synthesis through CTS with four cores
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          capacity_args=()
+          config=asic/ooo_config.mk
+          if [[ "$BACKEND" == inorder ]]; then
+            config=asic/config.mk
+          elif [[ "$BACKEND" == ooo_selected ]]; then
+            mapfile -t capacity_args < verification/core/sizing/selected_overrides.txt
+          fi
+          ./src/asic/run.sh cts "$config" "asic/work/$BACKEND" "${capacity_args[@]}"
+      - name: Check timing and summarize real physical results
+        if: always()
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          design=riscv_ooo
+          if [[ "$BACKEND" == inorder ]]; then design=riscv_core; fi
+          python3 src/asic/report.py --work "src/asic/work/$BACKEND" --design "$design" --output "src/asic/work/$BACKEND/summary.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nangate45-reports
+          name: nangate45-${{ matrix.backend }}
           path: |
-            asic/work/logs/nangate45/riscv_core/base/
-            asic/work/reports/nangate45/riscv_core/base/
-            asic/work/results/nangate45/riscv_core/base/*.sdc
+            src/asic/work/${{ matrix.backend }}/summary.json
+            src/asic/work/${{ matrix.backend }}/logs/nangate45/*/base/*.log
+            src/asic/work/${{ matrix.backend }}/logs/nangate45/*/base/*.json
+            src/asic/work/${{ matrix.backend }}/reports/nangate45/*/base/
+            src/asic/work/${{ matrix.backend }}/results/nangate45/*/base/*.sdc
+          if-no-files-found: warn
+          retention-days: 30
+
+  sizing-area:
+    needs: verilator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.verilator.outputs.asic_matrix) }}
+    env:
+      DOCKER_IMAGE: openroad/orfs@sha256:31c5fd29e541059e36ad87b197ece981c04d2ce3a1f2035976fe266ec0e521cb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Synthesize one sizing candidate with four cores
+        env:
+          CAPACITY_OVERRIDES: ${{ matrix.overrides }}
+          CAPACITY_TAG: ${{ matrix.tag }}
+        run: |
+          read -ra capacity_args <<< "$CAPACITY_OVERRIDES"
+          ./src/asic/run.sh synth asic/ooo_config.mk "asic/work/$CAPACITY_TAG" "${capacity_args[@]}"
+          python3 src/asic/report.py --stage synth --work "src/asic/work/$CAPACITY_TAG" --output "src/asic/work/$CAPACITY_TAG/summary.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: area-${{ matrix.tag }}
+          path: |
+            src/asic/work/${{ matrix.tag }}/summary.json
+            src/asic/work/${{ matrix.tag }}/logs/nangate45/riscv_ooo/base/1*.log
+            src/asic/work/${{ matrix.tag }}/reports/nangate45/riscv_ooo/base/synth*
           if-no-files-found: warn
           retention-days: 30
