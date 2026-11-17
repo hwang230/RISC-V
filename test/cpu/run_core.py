@@ -246,6 +246,19 @@ def validate_combined(configurations,combined):
             'regressions_vs_fastest_run_over_5_percent':fastest_regressions}
 
 
+def storage_proxy(config):
+    """Estimate variable ROB, rename and issue-queue storage in bits."""
+    rob=config['ROB_ENTRIES']
+    phys=config['PHYS_REGS']
+    rob_tag_width=max(1,(rob-1).bit_length())
+    phys_tag_width=max(1,(phys-1).bit_length())
+    iq=sum(config[name] for name in ('INT_ENTRIES','MUL_ENTRIES','DIV_ENTRIES','MEM_ENTRIES'))
+    rob_bits=rob*(221+2*phys_tag_width)
+    rename_and_register_bits=34*phys+64*phys_tag_width
+    queue_bits=iq*(4+rob_tag_width+3*phys_tag_width)
+    return rob_bits+rename_and_register_bits+queue_bits
+
+
 def sweep(args,base_config):
     directory=BUILD_ROOT/'sizing'
     directory.mkdir(parents=True,exist_ok=True)
@@ -256,8 +269,11 @@ def sweep(args,base_config):
             if config not in configs: configs.append(config)
     results=[]
     all_rows=[]
+    result_by_config={}
 
     def evaluate(config):
+        key=tuple(config[name] for name in DEFAULTS)
+        if key in result_by_config: return result_by_config[key]
         tag='_'.join(f'{key.lower()}{value}' for key,value in config.items())
         build_dir=directory/tag
         binary=build('tb_core_program',True,args.waves,'ooo',build_dir,config)
@@ -275,6 +291,7 @@ def sweep(args,base_config):
                 'retired':sum(r['retired'] for r in rows),'runs':{r['run']:r['cycles'] for r in rows}}
         result['ipc']=result['retired']/result['aggregate_cycles']
         results.append(result)
+        result_by_config[key]=result
         write_csv(directory/'sweep.csv',all_rows)
         (directory/'progress.json').write_text(json.dumps(results,indent=2)+'\n')
         return result
@@ -291,11 +308,34 @@ def sweep(args,base_config):
         regressions={name:100*(cycles/best['runs'][name]-1) for name,cycles in chosen['runs'].items() if cycles>best['runs'][name]*1.05}
         choices[parameter]={'value':selected[parameter],'best_cycles':best['aggregate_cycles'],
                             'selected_cycles':chosen['aggregate_cycles'],'regressions_over_5_percent':regressions}
+    independent_selected=dict(selected)
     combined=next((r for r in results if r['configuration']==selected),None)
     if combined is None: combined=evaluate(selected)
+    if not validate_combined(results,combined)['within_2_percent']:
+        # Individual-axis minima can interact when combined. Measure each
+        # immediate one-axis upgrade around that combination, in increasing
+        # storage cost, before choosing the smallest measured joint setting.
+        upgrades=[]
+        for parameter,values in SWEEPS.items():
+            larger=sorted(value for value in values if value>selected[parameter])
+            if larger:
+                candidate={**selected,parameter:larger[0]}
+                if tuple(candidate[name] for name in DEFAULTS) not in result_by_config:
+                    upgrades.append(candidate)
+        for candidate in sorted(upgrades,key=lambda config:(storage_proxy(config),
+                                                            tuple(config[name] for name in DEFAULTS))):
+            evaluate(candidate)
+        best_cycles=min(row['aggregate_cycles'] for row in results)
+        eligible=[row for row in results if row['aggregate_cycles']<=best_cycles*1.02]
+        combined=min(eligible,key=lambda row:(storage_proxy(row['configuration']),
+                                               row['aggregate_cycles'],
+                                               tuple(row['configuration'][name] for name in DEFAULTS)))
+        selected=dict(combined['configuration'])
     validation=validate_combined(results,combined)
-    report={'selected':selected,'choices':choices,'configurations':results,
-            'selection_rule':'Smallest individual capacity within 2% of best aggregate cycles; combined selection reverified.',
+    report={'selected':selected,'independent_selected':independent_selected,
+            'selected_storage_proxy_bits':storage_proxy(selected),
+            'choices':choices,'configurations':results,
+            'selection_rule':'Smallest measured storage proxy within 2% of the best measured aggregate cycles; individual-axis picks are combined and checked, then immediate one-axis upgrades are measured if needed.',
             'combined':combined,'combined_validation':validation,
             'area_note':'Capacity is a storage proxy; physical area and timing must be measured by Nangate45 synthesis/CTS.'}
     (directory/'recommendations.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -303,7 +343,9 @@ def sweep(args,base_config):
            '| Capacity | Selected | Best aggregate cycles | Selected cycles | Regressions >5% |',
            '|---|---:|---:|---:|---:|']
     for key,choice in choices.items(): lines.append(f'| {key} | {choice["value"]} | {choice["best_cycles"]} | {choice["selected_cycles"]} | {len(choice["regressions_over_5_percent"])} |')
-    lines += ['',f'Combined selected configuration: `{selected}`.',f'Combined aggregate cycles: {combined["aggregate_cycles"]}; IPC: {combined["ipc"]:.6f}.',
+    lines += ['',f'Independent per-axis combination: `{independent_selected}`.',
+              f'Final selected configuration: `{selected}` ({report["selected_storage_proxy_bits"]} variable storage bits).',
+              f'Combined aggregate cycles: {combined["aggregate_cycles"]}; IPC: {combined["ipc"]:.6f}.',
               f'Best measured aggregate: {validation["best_measured_aggregate_cycles"]} cycles; combined change: {validation["aggregate_cycle_change_percent"]:+.4f}%; within 2%: {validation["within_2_percent"]}.','',
               'The combined selection has these individual run regressions above 5% against the best aggregate configuration:', '',
               '| Run | Selected cycles | Reference cycles | Regression |','|---|---:|---:|---:|']

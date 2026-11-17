@@ -28,9 +28,21 @@ def main():
     for key, value in selected.items():
         if not isinstance(value, int) or value not in AXES[key]:
             raise ValueError(f'invalid selected capacity {key}={value}')
-    configs = [DEFAULT, selected]
-    configs += [{**DEFAULT, key: value} for key, values in AXES.items() for value in values]
-    unique = {tuple(c[k] for k in DEFAULT): c for c in configs}
+    measured = recommendations.get('configurations')
+    if not isinstance(measured, list) or not measured:
+        raise ValueError('recommendations must include the measured configurations list')
+    configs = [row.get('configuration', {}) for row in measured]
+    unique = {}
+    for config in configs:
+        if set(config) != set(DEFAULT):
+            raise ValueError('each measured configuration must provide all six uppercase capacity parameters')
+        for key, value in config.items():
+            if not isinstance(value, int) or value not in AXES[key]:
+                raise ValueError(f'invalid measured capacity {key}={value}')
+        unique.setdefault(tuple(config[k] for k in DEFAULT), config)
+    selected_key = tuple(selected[k] for k in DEFAULT)
+    if selected_key not in unique:
+        raise ValueError('selected configuration is missing from the measured configurations')
     matrix = []
     for config in unique.values():
         tag = '_'.join(f'{short}{config[key]}' for short, key in

@@ -132,9 +132,12 @@ module ooo_core #(
     function automatic logic [RW-1:0] next_rob(input logic [RW-1:0] tag);
         return (tag == RW'(ROB_ENTRIES-1)) ? '0 : tag+1'b1;
     endfunction
-    function automatic int age(input logic [RW-1:0] tag);
-        return (int'(tag) >= int'(rob_head)) ? int'(tag)-int'(rob_head) :
-               int'(tag)+ROB_ENTRIES-int'(rob_head);
+    function automatic logic [CW-1:0] age(input logic [RW-1:0] tag);
+        // ROB age is bounded by the ROB capacity. Keep the wrap-aware
+        // distance narrow so scheduler comparisons do not build 32-bit
+        // add/subtract paths from the small ROB tags.
+        return (tag >= rob_head) ? CW'(tag)-CW'(rob_head) :
+               CW'(tag)+CW'(ROB_ENTRIES)-CW'(rob_head);
     endfunction
     function automatic int queue_unit(input int slot);
         if (slot < MUL_BASE) return 0;
@@ -670,7 +673,7 @@ module ooo_core #(
                 recovering <= 1;
                 recovery_rob <= issue_rob;
                 recovery_target <= resolved_pc;
-                rob_count <= CW'(age(issue_rob)+1-(retire_valid ? 1 : 0));
+                rob_count <= age(issue_rob) + CW'(1) - CW'(retire_valid);
                 for (int r=0; r<ROB_ENTRIES; r++)
                     if (age(RW'(r)) > age(issue_rob)) rob[r].valid <= 0;
                 for (int q=0; q<IQ_ENTRIES; q++)
