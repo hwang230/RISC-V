@@ -65,6 +65,9 @@ module ooo_core #(
     localparam int PW = $clog2(PHYS_REGS);
     localparam int CW = $clog2(ROB_ENTRIES+1);
     localparam int IQ_ENTRIES = INT_ENTRIES+MUL_ENTRIES+DIV_ENTRIES+MEM_ENTRIES;
+    localparam int IQ_SLOT_WIDTH = (IQ_ENTRIES > 1) ? $clog2(IQ_ENTRIES) : 1;
+    localparam int IQ_TREE_LEAVES = 1 << $clog2(IQ_ENTRIES);
+    localparam int IQ_TREE_NODES = 2*IQ_TREE_LEAVES;
     localparam int MUL_BASE = INT_ENTRIES;
     localparam int DIV_BASE = MUL_BASE+MUL_ENTRIES;
     localparam int MEM_BASE = DIV_BASE+DIV_ENTRIES;
@@ -133,11 +136,17 @@ module ooo_core #(
         return (tag == RW'(ROB_ENTRIES-1)) ? '0 : tag+1'b1;
     endfunction
     function automatic logic [CW-1:0] age(input logic [RW-1:0] tag);
+        logic [RW-1:0] wrapped_distance;
         // ROB age is bounded by the ROB capacity. Keep the wrap-aware
         // distance narrow so scheduler comparisons do not build 32-bit
         // add/subtract paths from the small ROB tags.
-        return (tag >= rob_head) ? CW'(tag)-CW'(rob_head) :
-               CW'(tag)+CW'(ROB_ENTRIES)-CW'(rob_head);
+        if ((ROB_ENTRIES & (ROB_ENTRIES-1)) == 0) begin
+            wrapped_distance = tag-rob_head;
+            return CW'(wrapped_distance);
+        end else begin
+            return (tag >= rob_head) ? CW'(tag)-CW'(rob_head) :
+                   CW'(tag)+CW'(ROB_ENTRIES)-CW'(rob_head);
+        end
     endfunction
     function automatic int queue_unit(input int slot);
         if (slot < MUL_BASE) return 0;
@@ -158,7 +167,11 @@ module ooo_core #(
     logic [31:0] jump_target;
     logic branch_update_valid;
     fetch #(.ADDR_WIDTH(ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) u_fetch (
-        .clk(clk), .rst_n(rst_n), .stall(recovering || recover_event),
+        // Dispatch stops on recover_event above. Let fetch complete any
+        // in-flight request; recovery redirect flushes wrong-path responses.
+        // Keeping the scheduler's branch compare off i_read shortens the
+        // external request path without allowing wrong-path dispatch.
+        .clk(clk), .rst_n(rst_n), .stall(recovering),
         .jump_en(jump_en), .jump_target(jump_target),
         .branch_update_valid(branch_update_valid), .branch_update_pc(retire_pc),
         .branch_update_taken(rob[rob_head].taken), .consume(dispatch_fire),
@@ -314,6 +327,10 @@ module ooo_core #(
     logic mem_busy;
     logic [3:0] unit_ready;
     integer selected_slot;
+    logic [IQ_ENTRIES-1:0] issue_eligible;
+    logic [IQ_TREE_NODES-1:1] issue_tree_valid;
+    logic [CW-1:0] issue_tree_age [1:IQ_TREE_NODES-1];
+    logic [IQ_SLOT_WIDTH-1:0] issue_tree_slot [1:IQ_TREE_NODES-1];
     rob_entry_t selected;
     logic [31:0] operand1, operand2, operand3;
     logic selected_ready1, selected_ready2, selected_ready3;
@@ -322,9 +339,14 @@ module ooo_core #(
         unit_ready[1] = mul_req_ready;
         unit_ready[2] = div_req_ready;
         unit_ready[3] = !mem_busy && (!mem_valid || completion_accept[3]);
-        selected_slot = -1;
+        issue_eligible = '0;
+        for (int node=1; node<IQ_TREE_NODES; node++) begin
+            issue_tree_valid[node] = 0;
+            issue_tree_age[node] = '0;
+            issue_tree_slot[node] = '0;
+        end
         for (int q=0; q<IQ_ENTRIES; q++) begin
-            if (iq[q].valid && rob[iq[q].rob_tag].valid &&
+            issue_eligible[q] = iq[q].valid && rob[iq[q].rob_tag].valid &&
                 (iq[q].ready1 || (wb_valid && wb_packet.pdst != 0 &&
                                   !wb_packet.exception && iq[q].src1 == wb_packet.pdst)) &&
                 (iq[q].ready2 || (wb_valid && wb_packet.pdst != 0 &&
@@ -332,11 +354,35 @@ module ooo_core #(
                 (iq[q].ready3 || (wb_valid && wb_packet.pdst != 0 &&
                                   !wb_packet.exception && iq[q].src3 == wb_packet.pdst)) &&
                 unit_ready[queue_unit(q)] &&
-                (!(queue_unit(q) == 3 || rob[iq[q].rob_tag].serial) || iq[q].rob_tag == rob_head)) begin
-                if (selected_slot < 0) selected_slot = q;
-                else if (age(iq[q].rob_tag) < age(iq[selected_slot].rob_tag)) selected_slot = q;
+                (!(queue_unit(q) == 3 || rob[iq[q].rob_tag].serial) || iq[q].rob_tag == rob_head);
+            issue_tree_valid[IQ_TREE_LEAVES+q] = issue_eligible[q];
+            issue_tree_age[IQ_TREE_LEAVES+q] = age(iq[q].rob_tag);
+            issue_tree_slot[IQ_TREE_LEAVES+q] = IQ_SLOT_WIDTH'(q);
+        end
+        // A balanced tournament keeps oldest-ready selection logarithmic in
+        // queue depth while preserving global ROB-age priority.
+        for (int node=IQ_TREE_LEAVES-1; node>0; node--) begin
+            if (issue_tree_valid[2*node] && issue_tree_valid[2*node+1]) begin
+                if (issue_tree_age[2*node] <= issue_tree_age[2*node+1]) begin
+                    issue_tree_valid[node] = 1;
+                    issue_tree_age[node] = issue_tree_age[2*node];
+                    issue_tree_slot[node] = issue_tree_slot[2*node];
+                end else begin
+                    issue_tree_valid[node] = 1;
+                    issue_tree_age[node] = issue_tree_age[2*node+1];
+                    issue_tree_slot[node] = issue_tree_slot[2*node+1];
+                end
+            end else if (issue_tree_valid[2*node]) begin
+                issue_tree_valid[node] = 1;
+                issue_tree_age[node] = issue_tree_age[2*node];
+                issue_tree_slot[node] = issue_tree_slot[2*node];
+            end else if (issue_tree_valid[2*node+1]) begin
+                issue_tree_valid[node] = 1;
+                issue_tree_age[node] = issue_tree_age[2*node+1];
+                issue_tree_slot[node] = issue_tree_slot[2*node+1];
             end
         end
+        selected_slot = issue_tree_valid[1] ? int'(issue_tree_slot[1]) : -1;
         selected = '0;
         issue_rob = '0;
         issue_unit = 0;
